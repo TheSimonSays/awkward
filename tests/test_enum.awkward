@@ -1,0 +1,21 @@
+enum Color {
+    Red,
+    Green,
+    Blue
+}
+
+let color = Color.Red;
+print(color);
+
+if (color == Color.Red) {
+    print("It's red!");
+}
+
+enum Status {
+    Pending,
+    Success,
+    Error
+}
+
+let status = Status.Success;
+print(typeof(status));

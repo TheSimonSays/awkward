@@ -1,0 +1,28 @@
+let double = lambda x: x * 2;
+print(double(5));
+
+let add = lambda x, y: x + y;
+print(add(3, 7));
+
+let greet = lambda name: "Hello, " + name;
+print(greet("World"));
+
+let calc = lambda x, y: (x + y) * 2;
+print(calc(5, 3));
+
+let nums = [1, 2, 3, 4, 5];
+let square = lambda x: x * x;
+print(square(4));
+
+let multiplier = 10;
+let multiply = lambda x: x * multiplier;
+print(multiply(5));
+
+fn apply(func, value) {
+    return func(value);
+}
+let triple = lambda x: x * 3;
+print(apply(triple, 7));
+
+let addOne = lambda x: x + 1;
+print(addOne(addOne(addOne(0))));

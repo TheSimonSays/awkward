@@ -1,0 +1,15 @@
+# single line comment 0
+print("done 0");
+# single line comment 1
+# single line comment 2
+print("done 1 2");
+# single line comment 3
+print("done 3");
+
+
+fn foo() {
+    # foo function
+    return "foo";
+}
+
+print(foo());

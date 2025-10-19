@@ -1,0 +1,16 @@
+let arr1 = [1, 2, 3, 4, 5];
+let arr2 = [1, 2, 30, ["a", "b"]];
+
+for (let i in arr1) {
+    print("index is " + i + ", value is " + arr1[i])
+}
+
+for (let i in arr2) {
+    if (typeof(arr2[i]) == "array") {
+        for(let j in arr2[i]) {
+            print(arr2[i][j]);
+        }
+    } else {
+        print(arr2[i]);
+    }
+}

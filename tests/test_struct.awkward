@@ -1,0 +1,73 @@
+struct Product {
+    name;
+    price;
+    quantity;
+};
+
+impl Product {
+    fn total_value() {
+        return self.price * self.quantity;
+    }
+
+    fn restock(amount) {
+        self.quantity = self.quantity + amount;
+        return "Restocked " + self.name + " by " + amount + " units";
+    }
+}
+
+fn sell_product(product, amount) {
+    if (product.quantity >= amount) {
+        product.quantity = product.quantity - amount;
+        return product.price * amount;
+    } else {
+        return "Error Not enough stock for " + product.name;
+    }
+}
+
+
+let phone = new Product{name="Apple", price=1000, quantity=10};
+print("Initial stock " + phone);
+print(phone.restock(5));
+print("After restock " + phone);
+print("Total value " + phone.total_value());
+
+
+let sales = 0;
+let i = 0;
+
+while (i < 3) {
+    let sale = sell_product(phone, 1);
+    print("Sale " + (i + 1) + " " + sale);
+    sales = sales + sale;
+    i = i + 1;
+}
+
+print("Total sales " + sales);
+
+print("Final stock " + phone);
+
+let phone1 = new Product{name="Samsung", price=100, quantity=1};
+
+print(phone == phone1);
+
+struct Storage {
+    data;
+};
+
+let some_storage = new Storage{data=[]};
+
+print(some_storage.data);
+
+extend(some_storage.data, [1, 2, 3]);
+
+print(some_storage.data);
+
+for (let i in some_storage) {
+    print(i, some_storage[i]);
+    if (typeof(some_storage[i]) == "array") {
+        print("struct value is array");
+        for (let j in some_storage[i]) {
+            print("struct data value by", j "is", some_storage[i][j]);
+        }
+    }
+}

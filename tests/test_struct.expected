@@ -1,0 +1,17 @@
+Initial stock {name: Apple, price: 1000, quantity: 10}
+Restocked Apple by 5 units
+After restock {name: Apple, price: 1000, quantity: 15}
+Total value 15000
+Sale 1 1000
+Sale 2 1000
+Sale 3 1000
+Total sales 3000
+Final stock {name: Apple, price: 1000, quantity: 12}
+false
+[]
+[1, 2, 3]
+data [1, 2, 3]
+struct value is array
+struct data value by 0 is 1
+struct data value by 1 is 2
+struct data value by 2 is 3

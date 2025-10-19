@@ -1,0 +1,8 @@
+import m from math
+
+
+print(m.tan(2));
+print(m.asin(1));
+print(m.acos(2));
+print(m.atan(2));
+print(m.pow(2, 2));

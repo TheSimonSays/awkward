@@ -1,0 +1,195 @@
+enum TaskStatus {
+    Todo,
+    InProgress,
+    Done,
+    Abandoned
+}
+
+enum TaskCategory {
+    Existential,
+    Daily,
+    Social,
+    Health
+}
+
+struct Task {
+    title;
+    status;
+    priority;
+    category;
+}
+
+impl Task {
+    fn is_done() {
+        return self.status == TaskStatus.Done;
+    }
+    
+    fn is_high_priority() {
+        return self.priority >= 8;
+    }
+    
+    fn is_abandoned() {
+        return self.status == TaskStatus.Abandoned;
+    }
+    
+    fn get_summary() {
+        return self.title + " (P" + self.priority + ")";
+    }
+}
+
+let tasks = [
+    Task{title="find meaning in life", status=TaskStatus.Abandoned, priority=10, category=TaskCategory.Existential},
+    Task{title="pretend to be happy", status=TaskStatus.InProgress, priority=9, category=TaskCategory.Social},
+    Task{title="exist", status=TaskStatus.Done, priority=8, category=TaskCategory.Existential},
+    Task{title="contemplate void", status=TaskStatus.Todo, priority=7, category=TaskCategory.Existential},
+    Task{title="forget old friends", status=TaskStatus.Done, priority=5, category=TaskCategory.Social},
+    Task{title="survive another day", status=TaskStatus.InProgress, priority=10, category=TaskCategory.Daily},
+    Task{title="ignore messages", status=TaskStatus.Done, priority=6, category=TaskCategory.Social},
+    Task{title="stare at ceiling", status=TaskStatus.Todo, priority=3, category=TaskCategory.Daily},
+    Task{title="remember better times", status=TaskStatus.Abandoned, priority=9, category=TaskCategory.Existential},
+    Task{title="pretend sleep helps", status=TaskStatus.InProgress, priority=7, category=TaskCategory.Health}
+];
+
+fn count_by_status(task_list, target_status) {
+    return len(filter(task_list, lambda t: t.status == target_status));
+}
+
+let urgent = tasks 
+    pipe filter(lambda t: t.is_high_priority())
+    pipe filter(lambda t: t.status != TaskStatus.Done);
+
+print("Things that matter (but won't change anything): " + len(urgent));
+for (let i in urgent) {
+    let task = urgent[i];
+    print("  - " + task.title + " (priority: " + task.priority + ")");
+}
+
+print("");
+let done_tasks = tasks
+    pipe filter(lambda t: t.is_done());
+
+assert(len(done_tasks) > 0, "At least something got done, i guess");
+
+print("Things i somehow managed to do: " + len(done_tasks));
+for (let i in done_tasks) {
+    print("  - " + done_tasks[i].title);
+}
+
+print("");
+
+let in_progress = tasks
+    pipe filter(lambda t: t.status == TaskStatus.InProgress)
+    pipe map(lambda t: t.get_summary());
+
+print("Currently failing at:");
+for (let i in in_progress) {
+    print("  - " + in_progress[i]);
+}
+
+print("");
+
+let actionable = tasks
+    pipe filter(lambda t: t.status != TaskStatus.Done)
+    pipe filter(lambda t: t.priority > 5)
+    pipe map(lambda t: t.title + " [P" + t.priority + "]");
+
+print("High priority things i'm avoiding:");
+for (let i in actionable) {
+    print("  - " + actionable[i]);
+}
+
+print("");
+
+let abandoned = tasks
+    pipe filter(lambda t: t.is_abandoned())
+    pipe map(lambda t: t.get_summary());
+
+if (len(abandoned) > 0) {
+    print("Things i gave up on: " + len(abandoned));
+    for (let i in abandoned) {
+        print("  - " + abandoned[i]);
+    }
+}
+
+print("");
+
+let existential = filter(tasks, lambda t: t.category == TaskCategory.Existential);
+let daily = filter(tasks, lambda t: t.category == TaskCategory.Daily);
+let social = filter(tasks, lambda t: t.category == TaskCategory.Social);
+let health = filter(tasks, lambda t: t.category == TaskCategory.Health);
+
+print("Existential: " + len(existential) + " (questioning everything)");
+print("Daily: " + len(daily) + " (barely functioning)");
+print("Social: " + len(social) + " (avoiding people)");
+print("Health: " + len(health) + " (what's the point?)");
+
+print("");
+
+let todo_count = count_by_status(tasks, TaskStatus.Todo);
+let in_progress_count = count_by_status(tasks, TaskStatus.InProgress);
+let done_count = count_by_status(tasks, TaskStatus.Done);
+let abandoned_count = count_by_status(tasks, TaskStatus.Abandoned);
+
+print("Todo: " + todo_count + " (probably won't do)");
+print("In Progress: " + in_progress_count + " (barely)");
+print("Done: " + done_count + " (surprisingly)");
+print("Abandoned: " + abandoned_count + " (gave up)");
+print("Total: " + len(tasks) + " (too many)");
+
+print("");
+
+let existential_incomplete = tasks
+    pipe filter(lambda t: t.category == TaskCategory.Existential)
+    pipe filter(lambda t: t.status != TaskStatus.Done)
+    pipe filter(lambda t: t.status != TaskStatus.Abandoned);
+
+if (len(existential_incomplete) > 0) {
+    print("Still trying to figure out:");
+    for (let i in existential_incomplete) {
+        print("  - " + existential_incomplete[i].title);
+    }
+} else {
+    print("Nothing left to question (or everything)");
+}
+
+print("");
+
+let social_done = tasks
+    pipe filter(lambda t: t.category == TaskCategory.Social)
+    pipe filter(lambda t: t.is_done());
+
+if (len(social_done) > 0) {
+    print("Successfully avoided:");
+    for (let i in social_done) {
+        print("  - " + social_done[i].title);
+    }
+}
+
+let social_ongoing = tasks
+    pipe filter(lambda t: t.category == TaskCategory.Social)
+    pipe filter(lambda t: t.status == TaskStatus.InProgress);
+
+if (len(social_ongoing) > 0) {
+    print("Currently pretending:");
+    for (let i in social_ongoing) {
+        print("  - " + social_ongoing[i].title);
+    }
+}
+
+print("");
+
+let high_priority_undone = tasks
+    pipe filter(lambda t: t.is_high_priority())
+    pipe filter(lambda t: t.status != TaskStatus.Done);
+
+let total_done = len(done_tasks);
+let total_tasks = len(tasks);
+
+print("Completion rate: " + total_done + "/" + total_tasks);
+print("High priority failures: " + len(high_priority_undone));
+
+if (len(high_priority_undone) > len(done_tasks)) {
+    print("More important things undone than done");
+} else {
+    print("At least something worked out (barely)");
+}

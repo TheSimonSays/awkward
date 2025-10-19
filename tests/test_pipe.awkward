@@ -1,0 +1,7 @@
+let mult = lambda x: x * 2;
+let x = 5
+    pipe mult
+    pipe print;
+
+let say_hi = lambda name: "Hi, " + name + "!";
+let dude = "Dude" pipe say_hi pipe print;

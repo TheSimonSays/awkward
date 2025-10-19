@@ -1,0 +1,7 @@
+import s from system
+
+
+print(s.user());
+print(s.hostname());
+print(s.datetime());
+print(s.cwd());
