@@ -27,7 +27,7 @@ function debug_msg(msg) {
 }
 
 function init_interpreter() {
-    VERSION = "0.0.1.alfa.shit"
+    VERSION = "0.1.0"
 
     debug_msg("Initializing awkward interpreter version " VERSION)
 
@@ -50,6 +50,8 @@ function init_interpreter() {
     break_flag = 0
     continue_flag = 0
 
+    DEBUG_LEVEL = 1
+
     TYPE_NULL = "null"
     TYPE_BOOL = "bool"
     TYPE_INT = "int"
@@ -64,9 +66,21 @@ function init_interpreter() {
     BUILTIN_MODULES["math"] = 1
     BUILTIN_MODULES["system"] = 1
 
+    STRING_METHODS["upper"] = "string.upper"
+    STRING_METHODS["lower"] = "string.lower"
+    STRING_METHODS["len"]   = "string.len"
+
+    ARRAY_METHODS["append"] = "array.append"
+    ARRAY_METHODS["extend"] = "array.extend"
+    ARRAY_METHODS["len"]   = "array.len"
+
+    FUNCTION_METHODS["name"]   = "function.name"
+    FUNCTION_METHODS["call"]   = "function.call"
+
     init_operators()
 
     init_builtins()
+    init_builtin_methods()
 }
 
 function tokenize(code,   token_count, pos, token_found, current_char, substr_code, type, token_value) {
@@ -162,15 +176,16 @@ function parse(tokens_array, token_cnt,   prog_node) {
     current_token = 1
     total_tokens = token_cnt
 
-    prog_node = parse_program()
+    prog_node = parse_program(dir_path)
     debug_msg("Parsing complete, AST node count: " ast_node_counter)
     return prog_node
 }
 
-function parse_program(   prog_node, stmt_node) {
+function parse_program(dir_path,   prog_node, stmt_node) {
     debug_msg("Parsing program")
     prog_node = ++ast_node_counter
     ast_nodes[prog_node, "type"] = "Program"
+    ast_nodes[prog_node, "dir_path"] = dir_path
     ast_nodes[prog_node, "body_count"] = 0
 
     while (current_token <= total_tokens) {
@@ -232,6 +247,13 @@ function parse_statement(   token, token_parts, token_type, token_value) {
     return parse_expression_statement()
 }
 
+# @doc [pipes]
+# Pipe expression `pipe` chaining two or more expressions
+# examples:
+# let mult = lambda x: x * 2;
+# let x = 5
+#   pipe mult
+#   pipe print;
 function parse_pipe_declaration(   left, right, pipe_node) {
     debug_msg("Parsing pipe expression")
     left = parse_logical_or()
@@ -253,6 +275,59 @@ function parse_pipe_declaration(   left, right, pipe_node) {
     return left
 }
 
+function execute_pipe(node_id,   left_value, right_node, right_type, func_id, args, result, i, argc, callee_node, parts) {
+    debug_msg("Executing pipe expression")
+
+    left_value = execute(ast_nodes[node_id, "left"])
+    debug_msg("Pipe left value: " left_value)
+
+    right_node = ast_nodes[node_id, "right"]
+    right_type = ast_nodes[right_node, "type"]
+
+    if (right_type == "Identifier") {
+        func_id = execute(right_node)
+        delete args
+        args[1] = left_value
+
+        if (objects[func_id, "value"] ~ /^lambda:/) {
+            return call_lambda(func_id, args, 1)
+        } else if (objects[func_id, "value"] ~ /^builtin:/) {
+            split(objects[func_id, "value"], parts, ":")
+            return call_builtin(parts[2], args, 1)
+        } else {
+            return call_function(func_id, args, 1)
+        }
+
+    } else if (right_type == "CallExpression") {
+        callee_node = ast_nodes[right_node, "callee_node"]
+        func_id = execute(callee_node)
+
+        argc = ast_nodes[right_node, "args_count"]
+        delete args
+        args[1] = left_value
+
+        for (i = 1; i <= argc; i++) {
+            args[i + 1] = execute(ast_nodes[right_node, "arg_" i])
+        }
+
+        if (objects[func_id, "value"] ~ /^lambda:/) {
+            return call_lambda(func_id, args, argc + 1)
+        } else if (objects[func_id, "value"] ~ /^builtin:/) {
+            split(objects[func_id, "value"], parts, ":")
+            return call_builtin(parts[2], args, argc + 1)
+        } else {
+            return call_function(func_id, args, argc + 1)
+        }
+    }
+
+    error("Invalid pipe right side: " right_type)
+}
+
+# @doc [functions]
+# Lambda (anonymous) function declaration.
+# examples:
+# let f = lambda (x, y): x + y;
+# let g = lambda z: z * 2;
 function parse_lambda_declaration(   lambda_node) {
     lambda_node = ++ast_node_counter
     ast_nodes[lambda_node, "type"] = "FunctionExpression"
@@ -285,6 +360,45 @@ function parse_lambda_declaration(   lambda_node) {
     return lambda_node
 }
 
+function execute_lambda(node_id,   lambda_id, param_count, i) {
+    debug_msg("execute_lambda called with node=" node_id)
+
+    if (node_id == "" || node_id == 0) {
+        error("execute_lambda: node is empty!")
+    }
+
+    debug_msg("Creating lambda function from node " node_id)
+    
+    param_count = ast_nodes[node_id, "param_count"]
+    debug_msg("Lambda has " param_count " parameters")
+
+    lambda_id = create_value(TYPE_FUNCTION, "lambda:" node_id)
+    objects[lambda_id, "param_count"] = param_count
+    for (i = 0; i < param_count; i++) {
+        objects[lambda_id, "param_" i] = ast_nodes[node_id, "param_" i]
+        debug_msg("Lambda param " i " = " ast_nodes[node_id, "param_" i])
+    }
+
+    objects[lambda_id, "body"] = ast_nodes[node_id, "body"]
+    debug_msg("Lambda body node: " ast_nodes[node_id, "body"])
+
+    objects[lambda_id, "closure_scope"] = current_scope_id
+    debug_msg("Lambda closure scope: " current_scope_id)
+    debug_msg("Created lambda id=" lambda_id " with " param_count " parameters")
+
+    return lambda_id
+}
+
+# @doc [enums]
+# Parses an enum declaration and its variants.
+# examples:
+# enum Color {
+#   Red,
+#   Green,
+#   Blue
+# };
+# let color = Color.Red;
+# print(color == Color.Red);    # true
 function parse_enum_declaration(   enum_node, variant_name) {
     debug_msg("Parsing enum declaration")
     enum_node = ++ast_node_counter
@@ -317,6 +431,51 @@ function parse_enum_declaration(   enum_node, variant_name) {
 
     expect_token("DELIMITER", "}")
     return enum_node
+}
+
+function execute_enum_declaration(enum_node,   enum_name, enum_id, i, variant_name, variant_id) {
+    debug_msg("Executing enum declaration for " ast_nodes[enum_node, "name"])
+
+    enum_name = ast_nodes[enum_node, "name"]
+    enum_id = create_enum(enum_node)
+
+    declare_variable(enum_name, enum_id)
+
+    for (i = 0; i < ast_nodes[enum_node, "variants_count"]; i++) {
+        variant_name = ast_nodes[enum_node, "variant_" i]
+
+        variant_id = create_enum_variant(enum_name, variant_name, i)
+
+        objects[enum_id, "prop_key_" (i + 1)] = variant_name
+        objects[enum_id, "prop_value_" (i + 1)] = variant_id
+    }
+    objects[enum_id, "properties_count"] = ast_nodes[enum_node, "variants_count"]
+
+    return create_value(TYPE_NULL, "null", 0)
+}
+
+function create_enum(enum_def_id,   enum_id) {
+    debug_msg("Creating enum from definition node " enum_def_id)
+    enum_id = ++object_counter
+    objects[enum_id, "type"] = TYPE_OBJECT
+    objects[enum_id, "enum_name"] = ast_nodes[enum_def_id, "name"]
+    objects[enum_id, "definition"] = enum_def_id
+    objects[enum_id, "properties_count"] = 0
+    register_object(enum_id)
+    debug_msg("Created enum " objects[enum_id, "enum_name"] " with id " enum_id)
+    return enum_id
+}
+
+function create_enum_variant(enum_name, variant_name, index_,   variant_id) {
+    debug_msg("Creating enum variant " enum_name "." variant_name " = " index_)
+    variant_id = ++object_counter
+    objects[variant_id, "type"] = TYPE_ENUM
+    objects[variant_id, "enum_name"] = enum_name
+    objects[variant_id, "variant_name"] = variant_name
+    objects[variant_id, "value"] = index_
+    register_object(variant_id)
+    debug_msg("Created enum variant " enum_name "." variant_name " = " index_)
+    return variant_id
 }
 
 function parse_struct_declaration(   struct_node, member_name, property_node) {
@@ -352,74 +511,44 @@ function parse_struct_declaration(   struct_node, member_name, property_node) {
     return struct_node
 }
 
-function parse_break_statement(   break_node) {
-    debug_msg("Parsing break statement")
-    break_node = ++ast_node_counter
-    ast_nodes[break_node, "type"] = "BreakStatement"
-    advance_token()
-    expect_token("DELIMITER", ";")
-    return break_node
+function execute_struct_declaration(struct_node,   struct_name, struct_id) {
+    debug_msg("Executing struct declaration for " ast_nodes[struct_node, "name"])
+    struct_name = ast_nodes[struct_node, "name"]
+    struct_id = create_struct(struct_node)
+    declare_variable(struct_name, struct_id)
+    return create_value(TYPE_STRUCT, struct_id)
 }
 
-function parse_continue_statement(   continue_node) {
-    debug_msg("Parsing continue statement")
-    continue_node = ++ast_node_counter
-    ast_nodes[continue_node, "type"] = "ContinueStatement"
-    advance_token()
-    expect_token("DELIMITER", ";")
-    return continue_node
+# @doc [structs]
+# Creates a struct object from its definition node.
+# examples:
+# struct Point {
+#   x;
+#   y;
+# };
+# let p = new Point{x=10, y=20};
+# print(p.x);  # prints 10
+function create_struct(struct_def_id,   struct_id) {
+    debug_msg("Creating struct from definition node " struct_def_id)
+    struct_id = ++object_counter
+    objects[struct_id, "type"] = TYPE_STRUCT
+    objects[struct_id, "struct_name"] = ast_nodes[struct_def_id, "name"]
+    objects[struct_id, "definition"] = struct_def_id
+    objects[struct_id, "methods_count"] = 0
+    register_object(struct_id)
+    debug_msg("Created struct " objects[struct_id, "struct_name"] " with id " struct_id)
+    return struct_id
 }
 
-function parse_variable_declaration(   var_node) {
-    debug_msg("Parsing variable declaration")
-    var_node = ++ast_node_counter
-    ast_nodes[var_node, "type"] = "VariableDeclaration"
-
-    ast_nodes[var_node, "kind"] = get_token_value()
-    advance_token()
-
-    if (get_token_type() != "IDENTIFIER") {
-        error("Expected variable name")
-    }
-    ast_nodes[var_node, "id"] = get_token_value()
-    advance_token()
-
-    if (get_token_value() == "=") {
-        advance_token()
-        ast_nodes[var_node, "init"] = parse_expression()
-    }
-
-    expect_token("DELIMITER", ";")
-    return var_node
-}
-
-function parse_expression(   expr) {
-    expr = parse_assignment()
-    return expr
-}
-
-function parse_assignment(   assign_left, assign_right, assign_node) {
-    debug_msg("Parsing assignment")
-    assign_left = parse_pipe_declaration()
-
-    if (get_token_value() == "=") {
-        if (ast_nodes[assign_left, "type"] != "Identifier" && ast_nodes[assign_left, "type"] != "MemberExpression") {
-            error("Left side of assignment must be an identifier or member expression at position " current_token)
-        }
-
-        advance_token()
-        assign_right = parse_assignment()
-
-        assign_node = ++ast_node_counter
-        ast_nodes[assign_node, "type"] = "AssignmentExpression"
-        ast_nodes[assign_node, "left"] = assign_left
-        ast_nodes[assign_node, "right"] = assign_right
-        return assign_node
-    }
-
-    return assign_left
-}
-
+# @doc [structs]
+# Implement block for a struct.
+# examples:
+# impl Point {
+#   fn move(dx, dy) {
+#     self.x = self.x + dx;
+#     self.y = self.y + dy;
+#   }
+# }; # This adds the move method to the Point struct.
 function parse_impl_declaration(   impl_node, struct_name, method_node) {
     debug_msg("Parsing impl declaration")
     impl_node = ++ast_node_counter
@@ -448,8 +577,214 @@ function parse_impl_declaration(   impl_node, struct_name, method_node) {
     return impl_node
 }
 
+function execute_impl_declaration(impl_node,   struct_name, struct_id, i, method_node, method_id, existing_count, new_index, method_name, j) {
+    debug_msg("Executing impl declaration for " ast_nodes[impl_node, "struct_name"])
+    struct_name = ast_nodes[impl_node, "struct_name"]
+    struct_id = get_variable(struct_name)
+
+    if (objects[struct_id, "type"] != TYPE_STRUCT) {
+        error("Impl target " struct_name " is not a struct")
+    }
+
+    existing_count = objects[struct_id, "methods_count"]
+    if (existing_count == "") existing_count = 0
+
+    for (i = 1; i <= ast_nodes[impl_node, "methods_count"]; i++) {
+        method_node = ast_nodes[impl_node, "method_" i]
+        method_name = ast_nodes[method_node, "name"]
+
+        for (j = 1; j <= existing_count; j++) {
+            if (objects[struct_id, "method_name_" j] == method_name) {
+                error("Method " method_name " already defined for struct " struct_name)
+            }
+        }
+
+        new_index = existing_count + i
+        method_id = create_closure(method_node, current_scope_id)
+        objects[struct_id, "method_" new_index] = method_id
+        objects[struct_id, "method_name_" new_index] = method_name
+        debug_msg("Added method " method_name " to struct " struct_name)
+    }
+
+    objects[struct_id, "methods_count"] = existing_count + ast_nodes[impl_node, "methods_count"]
+    return create_value(TYPE_NULL, "null", 0)
+}
+
+# @doc [control_flow]
+# Break statement.
+# examples:
+# for (let i = 0; i < 10; i = i + 1) {
+#   if (i == 5) {
+#     break;
+#   }
+#   print(i);
+# }
+function parse_break_statement(   break_node) {
+    debug_msg("Parsing break statement")
+    break_node = ++ast_node_counter
+    ast_nodes[break_node, "type"] = "BreakStatement"
+    advance_token()
+    expect_token("DELIMITER", ";")
+    return break_node
+}
+
+function execute_break_statement(break_node) {
+    debug_msg("Executing break statement")
+    break_flag = 1
+    return create_value(TYPE_NULL, "null", 0)
+}
+
+# @doc [control_flow]
+# Continue statement.
+# examples:
+# for (let i = 0; i < 10; i = i + 1) {
+#   if (i % 2 == 0) {
+#     continue;
+#   }
+#   print(i);
+# }
+function parse_continue_statement(   continue_node) {
+    debug_msg("Parsing continue statement")
+    continue_node = ++ast_node_counter
+    ast_nodes[continue_node, "type"] = "ContinueStatement"
+    advance_token()
+    expect_token("DELIMITER", ";")
+    return continue_node
+}
+
+function execute_continue_statement(continue_node) {
+    debug_msg("Executing continue statement")
+    continue_flag = 1
+    return create_value(TYPE_NULL, "null", 0)
+}
+
+# @doc [variables]
+# Variable declaration, optionally with an initializer.
+# examples:
+# let x;
+# let y = 42;
+# const pi = 3.14;
+function parse_variable_declaration(   var_node) {
+    debug_msg("Parsing variable declaration")
+    var_node = ++ast_node_counter
+    ast_nodes[var_node, "type"] = "VariableDeclaration"
+
+    ast_nodes[var_node, "kind"] = get_token_value()
+    advance_token()
+
+    if (get_token_type() != "IDENTIFIER") {
+        error("Expected variable name")
+    }
+    ast_nodes[var_node, "id"] = get_token_value()
+    advance_token()
+
+    if (get_token_value() == "=") {
+        advance_token()
+        ast_nodes[var_node, "init"] = parse_expression()
+    }
+
+    expect_token("DELIMITER", ";")
+    return var_node
+}
+
+function execute_variable_declaration(var_node,   var_name, init_id, result_id) {
+    debug_msg("Executing variable declaration for " ast_nodes[var_node, "id"])
+    var_name = ast_nodes[var_node, "id"]
+    init_id = ast_nodes[var_node, "init"]
+
+    debug_msg("Variable " var_name " will be declared with init_id " init_id)
+
+    if (init_id != "") {
+        result_id = execute(init_id)
+    } else {
+        result_id = create_value(TYPE_NULL, "null", 0)
+    }
+
+    declare_variable(var_name, result_id)
+
+    return result_id
+}
+
+function declare_variable(name, value, scope,   key) {
+    if (scope == "") scope = current_scope_id
+
+    debug_msg("Declaring variable " name " in scope " scope " with value " value)
+
+    key = "var_" name
+    if ((scope, key) in scopes) {
+        error("Redeclaration of variable " name " in scope " scope)
+    }
+    scopes[scope, key] = value
+    scopes[scope, "variables_count"]++
+
+    debug_msg("Declared variable " name " in scope " scope ", check: scopes[" scope "," key "] = " scopes[scope, key])
+}
+
+function update_variable(name, value,   scope_id, key) {
+    scope_id = current_scope_id
+    key = "var_" name
+    debug_msg("Updating variable " name " starting from scope " scope_id)
+    while (scope_id != 0) {
+        if ((scope_id, key) in scopes) {
+            scopes[scope_id, key] = value
+            debug_msg("Updated variable " name " in scope " scope_id)
+            return
+        }
+        scope_id = scopes[scope_id, "parent"]
+    }
+    error("Assignment to undeclared variable " name)
+}
+
+function get_variable(name,   scope_id, key, parent_id) {
+    scope_id = current_scope_id
+    debug_msg("Resolving variable " name " starting from scope " scope_id)
+    while (scope_id != 0) {
+        key = "var_" name
+        if ((scope_id, key) in scopes) {
+            debug_msg("Found variable " name " in scope " scope_id)
+            return scopes[scope_id, key]
+        }
+        parent_id = scopes[scope_id, "parent"]
+        scope_id = parent_id
+    }
+    error("Variable not found: " name)
+}
+
+function parse_expression(   expr) {
+    expr = parse_assignment()
+    return expr
+}
+
+# @doc [expressions]
+# Assignment expression. The left-hand side must be an identifier or member expression.
+# examples:
+# x = 42;
+# obj.field = "hello";
+# arr[0] = 100;
+function parse_assignment(   assign_left, assign_right, assign_node) {
+    debug_msg("Parsing assignment")
+    assign_left = parse_pipe_declaration()
+
+    if (get_token_value() == "=") {
+        if (ast_nodes[assign_left, "type"] != "Identifier" && ast_nodes[assign_left, "type"] != "MemberExpression") {
+            error("Left side of assignment must be an identifier or member expression at position " current_token)
+        }
+
+        advance_token()
+        assign_right = parse_assignment()
+
+        assign_node = ++ast_node_counter
+        ast_nodes[assign_node, "type"] = "AssignmentExpression"
+        ast_nodes[assign_node, "left"] = assign_left
+        ast_nodes[assign_node, "right"] = assign_right
+        return assign_node
+    }
+
+    return assign_left
+}
+
 function execute(node_id,   node_type) {
-    if (!node_id) return create_value(TYPE_NULL, "null")
+    if (!node_id) return create_value(TYPE_NULL, "null", 0)
     node_type = ast_nodes[node_id, "type"]
     debug_msg("Executing node " node_id " of type " node_type)
 
@@ -509,209 +844,46 @@ function execute(node_id,   node_type) {
     error("Unknown node type: " node_type)
 }
 
-function execute_struct_declaration(struct_node,   struct_name, struct_id) {
-    debug_msg("Executing struct declaration for " ast_nodes[struct_node, "name"])
-    struct_name = ast_nodes[struct_node, "name"]
-    struct_id = create_struct(struct_node)
-    declare_variable(struct_name, struct_id)
-    return create_value(TYPE_STRUCT, struct_id)
-}
-
-function create_struct(struct_def_id,   struct_id) {
-    struct_id = ++object_counter
-    objects[struct_id, "type"] = TYPE_STRUCT
-    objects[struct_id, "struct_name"] = ast_nodes[struct_def_id, "name"]
-    objects[struct_id, "definition"] = struct_def_id
-    objects[struct_id, "methods_count"] = 0
-    register_object(struct_id)
-    debug_msg("Created struct " objects[struct_id, "struct_name"] " with id " struct_id)
-    return struct_id
-}
-
-function execute_impl_declaration(impl_node,   struct_name, struct_id, i, method_node, method_id) {
-    debug_msg("Executing impl declaration for " ast_nodes[impl_node, "struct_name"])
-    struct_name = ast_nodes[impl_node, "struct_name"]
-    struct_id = get_variable(struct_name)
-    if (objects[struct_id, "type"] != TYPE_STRUCT) {
-        error("Impl target " struct_name " is not a struct")
-    }
-    for (i = 1; i <= ast_nodes[impl_node, "methods_count"]; i++) {
-        method_node = ast_nodes[impl_node, "method_" i]
-        method_id = create_closure(method_node, current_scope_id)
-        objects[struct_id, "method_" i] = method_id
-        objects[struct_id, "method_name_" i] = ast_nodes[method_node, "name"]
-        debug_msg("Added method " ast_nodes[method_node, "name"] " to struct " struct_name)
-    }
-    objects[struct_id, "methods_count"] = ast_nodes[impl_node, "methods_count"]
-    return create_value(TYPE_NULL, "null")
-}
-
-function execute_lambda(node_id,   lambda_id, param_count, i) {
-    debug_msg("execute_lambda called with node=" node_id)
-
-    if (node_id == "" || node_id == 0) {
-        error("execute_lambda: node is empty!")
-    }
-
-    debug_msg("Creating lambda function from node " node_id)
-    
-    param_count = ast_nodes[node_id, "param_count"]
-    debug_msg("Lambda has " param_count " parameters")
-
-    lambda_id = create_value(TYPE_FUNCTION, "lambda:" node_id)
-    objects[lambda_id, "param_count"] = param_count
-    for (i = 0; i < param_count; i++) {
-        objects[lambda_id, "param_" i] = ast_nodes[node_id, "param_" i]
-        debug_msg("Lambda param " i " = " ast_nodes[node_id, "param_" i])
-    }
-
-    objects[lambda_id, "body"] = ast_nodes[node_id, "body"]
-    debug_msg("Lambda body node: " ast_nodes[node_id, "body"])
-
-    objects[lambda_id, "closure_scope"] = current_scope_id
-    debug_msg("Lambda closure scope: " current_scope_id)    
-    debug_msg("Created lambda id=" lambda_id " with " param_count " parameters")
-
-    return lambda_id
-}
-
-function execute_pipe(node_id,   left_value, right_node, right_type, func_id, args, result, i, argc, callee_node, parts) {
-    debug_msg("Executing pipe expression")
-
-    left_value = execute(ast_nodes[node_id, "left"])
-    debug_msg("Pipe left value: " left_value)
-
-    right_node = ast_nodes[node_id, "right"]
-    right_type = ast_nodes[right_node, "type"]
-
-    if (right_type == "Identifier") {
-        func_id = execute(right_node)
-        delete args
-        args[1] = left_value
-
-        if (objects[func_id, "value"] ~ /^lambda:/) {
-            return call_lambda(func_id, args, 1)
-        } else if (objects[func_id, "value"] ~ /^builtin:/) {
-            split(objects[func_id, "value"], parts, ":")
-            return call_builtin(parts[2], args, 1)
-        } else {
-            return call_function(func_id, args, 1)
-        }
-
-    } else if (right_type == "CallExpression") {
-        callee_node = ast_nodes[right_node, "callee_node"]
-        func_id = execute(callee_node)
-
-        argc = ast_nodes[right_node, "args_count"]
-        delete args
-        args[1] = left_value
-
-        for (i = 1; i <= argc; i++) {
-            args[i + 1] = execute(ast_nodes[right_node, "arg_" i])
-        }
-
-        if (objects[func_id, "value"] ~ /^lambda:/) {
-            return call_lambda(func_id, args, argc + 1)
-        } else if (objects[func_id, "value"] ~ /^builtin:/) {
-            split(objects[func_id, "value"], parts, ":")
-            return call_builtin(parts[2], args, argc + 1)
-        } else {
-            return call_function(func_id, args, argc + 1)
-        }
-    }
-
-    error("Invalid pipe right side: " right_type)
-}
-
-function execute_enum_declaration(enum_node,   enum_name, enum_id, i, variant_name, variant_id) {
-    debug_msg("Executing enum declaration for " ast_nodes[enum_node, "name"])
-
-    enum_name = ast_nodes[enum_node, "name"]
-    enum_id = create_enum(enum_node)
-
-    declare_variable(enum_name, enum_id)
-
-    for (i = 0; i < ast_nodes[enum_node, "variants_count"]; i++) {
-        variant_name = ast_nodes[enum_node, "variant_" i]
-
-        variant_id = create_enum_variant(enum_name, variant_name, i)
-
-        objects[enum_id, "prop_key_" (i + 1)] = variant_name
-        objects[enum_id, "prop_value_" (i + 1)] = variant_id
-    }
-    objects[enum_id, "properties_count"] = ast_nodes[enum_node, "variants_count"]
-
-    return create_value(TYPE_NULL, "null")
-}
-
-function create_enum(enum_def_id,   enum_id) {
-    enum_id = ++object_counter
-    objects[enum_id, "type"] = TYPE_OBJECT
-    objects[enum_id, "enum_name"] = ast_nodes[enum_def_id, "name"]
-    objects[enum_id, "definition"] = enum_def_id
-    objects[enum_id, "properties_count"] = 0
-    register_object(enum_id)
-    debug_msg("Created enum " objects[enum_id, "enum_name"] " with id " enum_id)
-    return enum_id
-}
-
-function create_enum_variant(enum_name, variant_name, index_,   variant_id) {
-    variant_id = ++object_counter
-    objects[variant_id, "type"] = TYPE_ENUM
-    objects[variant_id, "enum_name"] = enum_name
-    objects[variant_id, "variant_name"] = variant_name
-    objects[variant_id, "value"] = index_
-    register_object(variant_id)
-    debug_msg("Created enum variant " enum_name "." variant_name " = " index_)
-    return variant_id
-}
-
-function execute_member_expression(member_node,   obj_id, prop_id, obj_val_id, prop_val_id, type, index_, key, prop_type, i) {
+function execute_member_expression(member_node,   obj_val_id, prop_val_id, type, method_id, property_name, prop_type) {
     debug_msg("Executing member expression")
+
     obj_val_id = execute(ast_nodes[member_node, "object"])
+
     if (ast_nodes[member_node, "computed"]) {
         prop_val_id = execute(ast_nodes[member_node, "property"])
     } else {
         prop_val_id = create_value(TYPE_STRING, ast_nodes[ast_nodes[member_node, "property"], "name"])
     }
+
     debug_msg("Object value id: " obj_val_id " of type " objects[obj_val_id, "type"] " value " objects[obj_val_id, "value"])
+
     type = objects[obj_val_id, "type"]
-    if (type == TYPE_ARRAY) {
-        debug_msg("Executing array member expression")
-        prop_type = objects[prop_val_id, "type"]
-        if (prop_type != TYPE_INT) error("Array index must be integer")
-        index_ = objects[prop_val_id, "value"]
-        if (index_ < 0 || index_ >= objects[obj_val_id, "length"]) error("Index out of bounds")
-        return objects[obj_val_id, "element_" index_]
-    } else if (type == TYPE_OBJECT || type == TYPE_STRUCT) {
-        key = value_to_string(prop_val_id)
-        for (i = 1; i <= objects[obj_val_id, "properties_count"]; i++) {
-            if (objects[obj_val_id, "prop_key_" i] == key) {
-                return objects[obj_val_id, "prop_value_" i]
-            }
+    prop_type = objects[prop_val_id, "type"]
+
+    if (prop_type == TYPE_STRING) {
+        property_name = objects[prop_val_id, "value"]
+        method_id = try_get_builtin_method(obj_val_id, property_name)
+        if (method_id != "") {
+            return method_id
         }
-        if (objects[obj_val_id, "prototype"] != "") {
-            prototype_id = objects[obj_val_id, "prototype"]
-            for (i = 1; i <= objects[prototype_id, "methods_count"]; i++) {
-                if (objects[prototype_id, "method_name_" i] == key) {
-                    method_id = objects[prototype_id, "method_" i]
-                    objects[method_id, "self"] = obj_val_id
-                    return method_id
-                }
-            }
-        }
-        error("Property or method not found: " key)
-    } else if (type == TYPE_STRING) {
-        prop_type = objects[prop_val_id, "type"]
-        if (prop_type != TYPE_INT) error("String index must be integer")
-        index_ = objects[prop_val_id, "value"]
-        str_len = length(objects[obj_val_id, "value"])
-        if (index_ < 0 || index_ >= str_len) error("String index out of bounds")
-        char = substr(objects[obj_val_id, "value"], index_ + 1, 1)
-        return create_value(TYPE_STRING, char)
-    } else {
-        error("Cannot access member on non-object/array/struct")
     }
+
+    if (is_indexable(type)) {
+        if (prop_type == TYPE_INT) {
+            return get_indexed_value(obj_val_id, prop_val_id)
+        } else {
+            error("Property not found: " objects[prop_val_id, "value"] " (arrays/strings only support numeric indexing)")
+        }
+    }
+
+    if (type == TYPE_OBJECT || type == TYPE_STRUCT) {
+        property_name = value_to_string(prop_val_id)
+        result = get_object_property(obj_val_id, property_name)
+        debug_msg("Got property '" property_name "': value_id=" result " type=" objects[result, "type"])
+        return result
+    }
+
+    error("Cannot access member on type: " type)
 }
 
 function execute_array_expression(array_node,   elem_count, i, elem_id, element_ids, array_id) {
@@ -750,31 +922,24 @@ function create_object(property_keys, property_values, count,   obj_id, i) {
     return obj_id
 }
 
-function execute_break_statement(break_node) {
-    debug_msg("Executing break statement")
-    break_flag = 1
-    return create_value(TYPE_NULL, "null")
-}
-
-function execute_continue_statement(continue_node) {
-    debug_msg("Executing continue statement")
-    continue_flag = 1
-    return create_value(TYPE_NULL, "null")
-}
-
-function execute_assignment(assign_node,   left_id, right_id, left_name, result_id, left_type, obj_val_id, prop_val_id, type, index_, key, i, found) {
+function execute_assignment(assign_node,   left_id, right_id, left_name, result_id, left_type, obj_val_id, prop_val_id, type, key) {
     debug_msg("Executing assignment")
+
     left_id = ast_nodes[assign_node, "left"]
     right_id = ast_nodes[assign_node, "right"]
-
     result_id = execute(right_id)
 
     left_type = ast_nodes[left_id, "type"]
+
     if (left_type == "Identifier") {
         left_name = ast_nodes[left_id, "name"]
         update_variable(left_name, result_id)
-    } else if (left_type == "MemberExpression") {
+        return result_id
+    }
+
+    if (left_type == "MemberExpression") {
         obj_val_id = execute(ast_nodes[left_id, "object"])
+
         if (ast_nodes[left_id, "computed"]) {
             prop_val_id = execute(ast_nodes[left_id, "property"])
         } else {
@@ -783,50 +948,21 @@ function execute_assignment(assign_node,   left_id, right_id, left_name, result_
 
         type = objects[obj_val_id, "type"]
 
-        if (type == TYPE_ARRAY) {
-            prop_type = objects[prop_val_id, "type"]
-            if (prop_type != TYPE_INT) error("Array index must be integer")
-            index_ = objects[prop_val_id, "value"]
-            if (index_ < 0 || index_ >= objects[obj_val_id, "length"]) error("Index out of bounds")
-            objects[obj_val_id, "element_" index_] = result_id
-        } else if (type == TYPE_OBJECT || type == TYPE_STRUCT) {
-            key = value_to_string(prop_val_id)
-            found = 0
-            for (i = 1; i <= objects[obj_val_id, "properties_count"]; i++) {
-                if (objects[obj_val_id, "prop_key_" i] == key) {
-                    objects[obj_val_id, "prop_value_" i] = result_id
-                    found = 1
-                    break
-                }
-            }
-            if (!found) {
-                objects[obj_val_id, "properties_count"]++
-                objects[obj_val_id, "prop_key_" objects[obj_val_id, "properties_count"]] = key
-                objects[obj_val_id, "prop_value_" objects[obj_val_id, "properties_count"]] = result_id
-            }
-        } else {
-            error("Cannot assign to member on non-object/array/struct")
+        if (is_index_writable(type)) {
+            set_indexed_value(obj_val_id, prop_val_id, result_id)
+            return result_id
         }
-    } else {
-        error("Left side of assignment must be an identifier or member expression")
+
+        if (type == TYPE_OBJECT || type == TYPE_STRUCT) {
+            key = value_to_string(prop_val_id)
+            set_object_property(obj_val_id, key, result_id)
+            return result_id
+        }
+
+        error("Cannot assign to member of type: " type)
     }
 
-    return result_id
-}
-
-function execute_variable_declaration(var_node,   var_name, init_id, result_id) {
-    debug_msg("Executing variable declaration for " ast_nodes[var_node, "id"])
-    var_name = ast_nodes[var_node, "id"]
-    init_id = ast_nodes[var_node, "init"]
-
-    if (init_id != "") {
-        result_id = execute(init_id)
-    } else {
-        result_id = create_value(TYPE_NULL, "null")
-    }
-    declare_variable(var_name, result_id)
-
-    return result_id
+    error("Left side of assignment must be an identifier or member expression")
 }
 
 function execute_binary_expression(bin_node,   left_id, right_id, op, left_val_id, right_val_id, result_type, result_val) {
@@ -908,8 +1044,10 @@ function execute_binary_expression(bin_node,   left_id, right_id, op, left_val_i
 }
 
 function compare_structs(left_id, right_id,   left_count, right_count, i, j, match_, key_l, val_l, key_r, val_r) {
+    debug_msg("Comparing structs " left_id " and " right_id)
     left_count  = objects[left_id, "properties_count"]
     right_count = objects[right_id, "properties_count"]
+    debug_msg("Left struct has " left_count " properties, right struct has " right_count " properties")
 
     if (left_count != right_count)
         return 0
@@ -922,6 +1060,8 @@ function compare_structs(left_id, right_id,   left_count, right_count, i, j, mat
         for (j = 1; j <= right_count; j++) {
             key_r = objects[right_id, "prop_key_" j]
             val_r = objects[right_id, "prop_value_" j]
+
+            debug_msg("Comparing left key " key_l " with right key " key_r)
 
             if (key_l == key_r) {
                 if (objects[val_l, "type"] == TYPE_STRUCT && objects[val_r, "type"] == TYPE_STRUCT) {
@@ -945,8 +1085,11 @@ function compare_structs(left_id, right_id,   left_count, right_count, i, j, mat
 }
 
 function compare_arrays(id1, id2,    len1, len2, i, el1, el2) {
+    debug_msg("Comparing arrays " id1 " and " id2)
     len1 = objects[id1, "length"]
     len2 = objects[id2, "length"]
+
+    debug_msg("Array lengths: " len1 " vs " len2)
 
     if (len1 != len2) {
         debug_msg("compare_arrays: different lengths " len1 " vs " len2)
@@ -958,8 +1101,7 @@ function compare_arrays(id1, id2,    len1, len2, i, el1, el2) {
         el2 = objects[id2, "element_" i]
 
         if (objects[el1, "type"] != objects[el2, "type"]) {
-            debug_msg("compare_arrays: element " i " type mismatch: " \
-                      objects[el1, "type"] " vs " objects[el2, "type"])
+            debug_msg("compare_arrays: element " i " type mismatch: " objects[el1, "type"] " vs " objects[el2, "type"])
             return create_value(TYPE_BOOL, "false")
         }
 
@@ -1000,6 +1142,9 @@ function execute_function_call(call_node,   callee_node, args, argc, i, arg_id, 
         for (i = 1; i <= argc; i++) {
             args[i] = execute(args[i])
         }
+        if (objects[val_id, "self"] != "") {
+            args[0] = objects[val_id, "self"]
+        }
         debug_msg("Calling builtin function " parts[1] " with " argc " args")
         return call_builtin(parts[2], args, argc)
     } else if (objects[val_id, "type"] == TYPE_FUNCTION) {
@@ -1011,7 +1156,7 @@ function execute_function_call(call_node,   callee_node, args, argc, i, arg_id, 
         return create_instance(val_id, args, argc)
     }
     error("Called value is not a function or constructor")
-    return create_value(TYPE_NULL, "null")
+    return create_value(TYPE_NULL, "null", 0)
 }
 
 function call_lambda(lambda_id, args, argc,   param_count, i, body_node, old_scope, result, new_scope) {
@@ -1066,13 +1211,22 @@ function execute_program_node(prog_node,   result_id, i, stmt_node) {
     return result_id
 }
 
-function create_value(type, val,   obj_id) {
+function create_value(type, val, register,   obj_id, object_type) {
+    debug_msg("Creating value of type " type " with value " val " (register=" register ")")
+    if (register == "") register = 1
+
     debug_msg("Creating value of type " type " with value " val)
     obj_id = ++object_counter
     objects[obj_id, "type"] = type
     objects[obj_id, "value"] = val
-    register_object(obj_id)
-    debug_msg("Created value of type " type " with id " obj_id)
+    if (type == TYPE_STRING) {
+        objects[obj_id, "length"] = length(val)
+    }
+    object_type = create_object_type(type)
+    objects[obj_id, "object_type"] = object_type
+    if (register)
+        register_object(obj_id)
+    debug_msg("Created value of type " type " with id " obj_id " with object type " object_type " (registered=" register ")")
     return obj_id
 }
 
@@ -1110,6 +1264,7 @@ function type_check(val1_id, val2_id, operation,   type1, type2) {
 function register_object(obj_id) {
     debug_msg("Registering object " obj_id)
     if (object_counter % gc_threshold == 0) {
+        debug_msg("GC threshold reached (" object_counter " objects), running garbage collector...")
         garbage_collect()
     }
 }
@@ -1142,6 +1297,7 @@ function mark_reachable_objects(   i) {
 
     for (i = 1; i <= call_stack_size; i++) {
         mark_scope_objects(call_stack[i, "scope"])
+        debug_msg("Marked scope " call_stack[i, "scope"] " from call stack")
     }
 
     mark_scope_chain(current_scope_id)
@@ -1152,6 +1308,7 @@ function mark_scope_chain(scope_id) {
     while (scope_id != 0) {
         mark_scope_objects(scope_id)
         scope_id = scopes[scope_id, "parent"]
+        debug_msg("Moving to parent scope " scope_id)
     }
 }
 
@@ -1193,6 +1350,7 @@ function mark_scope_objects(scope_id,   idx, parts, s_id, key, val_id) {
 }
 
 function new_scope(parent_id,   new_id) {
+    debug_msg("Creating new scope with parent " parent_id)
     new_id = ++scope_counter
     scopes[new_id, "parent"] = parent_id
     scopes[new_id, "variables_count"] = 0
@@ -1200,82 +1358,142 @@ function new_scope(parent_id,   new_id) {
     return new_id
 }
 
-function declare_variable(name, value, scope,   key) {
-    if (scope == "") scope = current_scope_id
-
-    key = "var_" name
-    if ((scope, key) in scopes) {
-        error("Redeclaration of variable " name " in scope " scope)
-    }
-    scopes[scope, key] = value
-    scopes[scope, "variables_count"]++
-    debug_msg("Declared variable " name " in scope " scope)
-}
-
-function update_variable(name, value,   scope_id, key) {
-    scope_id = current_scope_id
-    key = "var_" name
-    while (scope_id != 0) {
-        if ((scope_id, key) in scopes) {
-            scopes[scope_id, key] = value
-            debug_msg("Updated variable " name " in scope " scope_id)
-            return
-        }
-        scope_id = scopes[scope_id, "parent"]
-    }
-    error("Assignment to undeclared variable " name)
-}
-
-function get_variable(name,   scope_id, key, parent_id) {
-    scope_id = current_scope_id
-    while (scope_id != 0) {
-        key = "var_" name
-        if ((scope_id, key) in scopes) {
-            debug_msg("Found variable " name " in scope " scope_id)
-            return scopes[scope_id, key]
-        }
-        parent_id = scopes[scope_id, "parent"]
-        scope_id = parent_id
-    }
-    error("Variable not found: " name)
-}
-
 function init_builtins() {
-    fun_id = create_value(TYPE_FUNCTION, "builtin:print")
-    declare_variable("print", fun_id)
+    debug_msg("Initializing built-in functions...")
+    register_builtin_function("id")
+    register_builtin_function("print")
+    register_builtin_function("type")
+    register_builtin_function("len")
+    register_builtin_function("assert")
+    register_builtin_function("pop")
+    register_builtin_function("clear")
+    register_builtin_function("filter")
+    register_builtin_function("map")
+    register_builtin_function("reduce")
+    register_builtin_function("range")
+}
 
-    fun_id = create_value(TYPE_FUNCTION, "builtin:typeof")
-    declare_variable("typeof", fun_id)
+function init_builtin_methods() {
+    debug_msg("Initializing built-in methods...")
+    METHODS[TYPE_STRING, "upper"] = "string.upper"
+    METHODS[TYPE_STRING, "lower"] = "string.lower"
+    METHODS[TYPE_STRING, "len"]   = "string.len"
 
-    fun_id = create_value(TYPE_FUNCTION, "builtin:len")
-    declare_variable("len", fun_id)
+    METHODS[TYPE_ARRAY, "append"] = "array.append"
+    METHODS[TYPE_ARRAY, "extend"] = "array.extend"
+    METHODS[TYPE_ARRAY, "len"]    = "array.len"
 
-    fun_id = create_value(TYPE_FUNCTION, "builtin:assert")
-    declare_variable("assert", fun_id)
+    METHODS[TYPE_FUNCTION, "name"] = "function.name"
+    METHODS[TYPE_FUNCTION, "call"] = "function.call"
+}
 
-    fun_id = create_value(TYPE_FUNCTION, "builtin:push")
-    declare_variable("push", fun_id)
+function try_get_builtin_method(obj_val_id, method_name,   type, func_id) {
+    debug_msg("Trying to get builtin method " method_name " for object " obj_val_id)
+    type = objects[obj_val_id, "type"]
 
-    fun_id = create_value(TYPE_FUNCTION, "builtin:extend")
-    declare_variable("extend", fun_id)
+    if ((type, method_name) in METHODS) {
+        func_id = create_value(TYPE_FUNCTION, "builtin:" METHODS[type, method_name])
+        objects[func_id, "self"] = obj_val_id
+        return func_id
+    }
 
-    fun_id = create_value(TYPE_FUNCTION, "builtin:pop")
-    declare_variable("pop", fun_id)
+    return ""
+}
 
-    fun_id = create_value(TYPE_FUNCTION, "builtin:clear")
-    declare_variable("clear", fun_id)
+function is_indexable(type) {
+    debug_msg("Checking if type " type " is indexable")
+    return (type == TYPE_ARRAY || type == TYPE_STRING)
+}
 
-    fun_id = create_value(TYPE_FUNCTION, "builtin:filter")
-    declare_variable("filter", fun_id)
+function is_index_writable(type) {
+    debug_msg("Checking if type " type " is index writable")
+    return (type == TYPE_ARRAY || type == TYPE_STRING)
+}
 
-    fun_id = create_value(TYPE_FUNCTION, "builtin:map")
-    declare_variable("map", fun_id)
+function register_builtin_function(name,   fun_id) {
+    debug_msg("Registering builtin function " name)
+    fun_id = create_value(TYPE_FUNCTION, "builtin:" name)
+    objects[fun_id, "name"] = name
+    objects[fun_id, "is_builtin"] = 1
+    declare_variable(name, fun_id)
+}
 
-    fun_id = create_value(TYPE_FUNCTION, "builtin:reduce")
-    declare_variable("reduce", fun_id)
+function get_indexed_value(obj_val_id, index_val_id,   type, prop_type, index_, str_len, char) {
+    debug_msg("Getting indexed value from object " obj_val_id)
+    type = objects[obj_val_id, "type"]
+    prop_type = objects[index_val_id, "type"]
 
-    fun_id = create_value(TYPE_FUNCTION, "builtin:range")
-    declare_variable("range", fun_id)
+    if (prop_type != TYPE_INT) {
+        error((type == TYPE_ARRAY ? "Array" : "String") " index must be integer")
+    }
+
+    index_ = objects[index_val_id, "value"]
+
+    if (type == TYPE_ARRAY) {
+        if (index_ < 0 || index_ >= objects[obj_val_id, "length"]) {
+            error("Array index out of bounds")
+        }
+        return objects[obj_val_id, "element_" index_]
+    } else if (type == TYPE_STRING) {
+        str_len = length(objects[obj_val_id, "value"])
+        if (index_ < 0 || index_ >= str_len) {
+            error("String index out of bounds")
+        }
+        char = substr(objects[obj_val_id, "value"], index_ + 1, 1)
+        return create_value(TYPE_STRING, char)
+    }
+}
+
+function set_indexed_value(obj_val_id, index_val_id, value_id,   type, prop_type, index_, old_str, old_str_len, new_char, new_str) {
+    debug_msg("Setting indexed value in object " obj_val_id)
+    type = objects[obj_val_id, "type"]
+    prop_type = objects[index_val_id, "type"]
+
+    if (prop_type != TYPE_INT) {
+        error("Index must be integer")
+    }
+
+    index_ = objects[index_val_id, "value"]
+
+    if (type == TYPE_ARRAY) {
+        if (index_ < 0 || index_ >= objects[obj_val_id, "length"]) {
+            error("Array index out of bounds")
+        }
+        objects[obj_val_id, "element_" index_] = value_id
+        return create_object(TYPE_NULL, "null", 0)
+    } else if (type == TYPE_STRING) {
+        old_str = objects[obj_val_id, "value"]
+        old_str_len = objects[obj_val_id, "length"]
+        
+        if (index_ < 0 || index_ >= old_str_len) {
+            error("String index out of bounds")
+        }
+
+        if (objects[value_id, "type"] != TYPE_STRING) {
+            error("Can only assign string to string index")
+        }
+        new_char = objects[value_id, "value"]
+
+        if (length(new_char) > 1) {
+            new_char = substr(new_char, 1, 1)
+        }
+        if (length(new_char) == 0) {
+            error("Cannot assign empty string to string index")
+        }
+
+        if (index_ == 0) {
+            new_str = new_char substr(old_str, 2)
+        } else if (index_ == old_str_len - 1) {
+            new_str = substr(old_str, 1, old_str_len - 1) new_char
+        } else {
+            new_str = substr(old_str, 1, index_) new_char substr(old_str, index_ + 2)
+        }
+
+        objects[obj_val_id, "value"] = new_str
+        return create_object(TYPE_NULL, "null", 0)
+    }
+
+    return create_object(TYPE_NULL, "null", 0)
 }
 
 function init_custom_builtins(module_name, obj_id) {
@@ -1287,10 +1505,54 @@ function init_custom_builtins(module_name, obj_id) {
         obj_id = create_system_module()
         return obj_id
     }
-    return create_value(TYPE_NULL, "null")
+    return create_value(TYPE_NULL, "null", 0)
+}
+
+function get_object_property(obj_val_id, key,   i, prototype_id, method_id) {
+    debug_msg("Getting property '" key "' from object " obj_val_id)
+    
+    if ((obj_val_id, key) in objects) {
+        debug_msg("  Found as direct property")
+        return objects[obj_val_id, key]
+    }
+
+    for (i = 1; i <= objects[obj_val_id, "properties_count"]; i++) {
+        if (objects[obj_val_id, "prop_key_" i] == key) {
+            return objects[obj_val_id, "prop_value_" i]
+        }
+    }
+
+    if (objects[obj_val_id, "prototype"] != "") {
+        prototype_id = objects[obj_val_id, "prototype"]
+        for (i = 1; i <= objects[prototype_id, "methods_count"]; i++) {
+            if (objects[prototype_id, "method_name_" i] == key) {
+                method_id = objects[prototype_id, "method_" i]
+                objects[method_id, "self"] = obj_val_id
+                return method_id
+            }
+        }
+    }
+    error("Property or method not found: " key)
+}
+
+function set_object_property(obj_val_id, key, value_id,   i) {
+    debug_msg("Setting property '" key "' on object " obj_val_id)
+    for (i = 1; i <= objects[obj_val_id, "properties_count"]; i++) {
+        if (objects[obj_val_id, "prop_key_" i] == key) {
+            objects[obj_val_id, "prop_value_" i] = value_id
+            return 1
+        }
+    }
+
+    objects[obj_val_id, "properties_count"]++
+    i = objects[obj_val_id, "properties_count"]
+    objects[obj_val_id, "prop_key_" i] = key
+    objects[obj_val_id, "prop_value_" i] = value_id
+    return 1
 }
 
 function create_math_module(obj_id, fun_id, i) {
+    debug_msg("Creating math module")
     obj_id = create_object()
     objects[obj_id, "type"] = TYPE_STRUCT
     objects[obj_id, "struct_name"] = "math"
@@ -1309,6 +1571,7 @@ function create_math_module(obj_id, fun_id, i) {
 }
 
 function create_system_module(obj_id, fun_id, i) {
+    debug_msg("Creating system module")
     obj_id = create_object()
     objects[obj_id, "type"] = TYPE_STRUCT
     objects[obj_id, "struct_name"] = "system"
@@ -1355,13 +1618,11 @@ function call_math(func_name, arg, arg2,    result) {
 function call_builtin(func_name, args, argc) {
     debug_msg("Builtin function " func_name " with " argc " arguments")
 
+    # builins functions
+    if (func_name == "id") return builtin_id(args, argc)
     if (func_name == "print") return builtin_print(args, argc)
-    if (func_name == "typeof") return builtin_typeof(args, argc)
-    if (func_name ~ /^math\./) return builtin_math(func_name, args, argc)
-    if (func_name ~ /^system\./) return builtin_system(func_name, args, argc)
+    if (func_name == "type") return builtin_type(args, argc)
     if (func_name == "len") return builtin_len(args, argc)
-    if (func_name == "push") return builtin_push(args, argc)
-    if (func_name == "extend") return builtin_extend(args, argc)
     if (func_name == "pop") return builtin_pop(args, argc)
     if (func_name == "clear") return builtin_clear(args, argc)
     if (func_name == "assert") return builtin_assert(args, argc)
@@ -1370,27 +1631,162 @@ function call_builtin(func_name, args, argc) {
     if (func_name == "reduce") return builtin_reduce(args, argc)
     if (func_name == "range") return builtin_range(args, argc)
 
+    # builins modules
+    if (func_name ~ /^math\./) return builtin_math(func_name, args, argc)
+    if (func_name ~ /^system\./) return builtin_system(func_name, args, argc)
+
+    # builins object methods
+    if (func_name ~ /^string\./) return builtin_string(func_name, args, argc)
+    if (func_name ~ /^array\./) return builtin_array(func_name, args, argc)
+    if (func_name ~ /^function\./) return builtin_function(func_name, args, argc)
+
     error("Unknown builtin function: " func_name)
 }
 
+# @doc [strings]
+# Built-in methods for string objects.
+# examples:
+# let str = "hello"
+# str.upper()  # returns "HELLO"
+# str.lower()  # returns "hello"
+# str.len()    # returns 5
+function builtin_string(func_name, args, argc,  self_id, self_value, result) {
+    debug_msg("Executing builtin string method " func_name " with " argc " arguments")
+    self_id = args[0]
+    if (self_id == "") error("Method " func_name " called without context")
+    self_value = objects[self_id, "value"]
+
+    if (func_name == "string.upper") {
+        result = toupper(self_value)
+    } else if (func_name == "string.lower") {
+        result = tolower(self_value)
+    } else if (func_name == "string.len") {
+        return create_value(TYPE_INT, objects[self_id, "length"], 0)
+    } else {
+        error("Unknown string method: " func_name)
+    }
+
+    objects[self_id, "value"] = result
+    return self_id
+}
+
+# @doc [functions]
+# Built-in methods for function objects.
+# examples:
+# func.name()  # returns the name of the function
+# func.call()  # calls the function
+function builtin_function(func_name, args, argc,  self_id, self_value) {
+    debug_msg("Executing builtin function method " func_name " with " argc " arguments")
+    self_id = args[0]
+    if (self_id == "") error("Method " func_name " called without context")
+    self_value = objects[self_id, "name"]
+
+    if (func_name == "function.name") {
+        self_value = objects[self_id, "name"]
+        if (self_value == "") self_value = "<anonymous>"
+        return create_value(TYPE_STRING, self_value, 0)
+    } else if (func_name == "function.call") {
+        delete call_args
+        for (i = 1; i <= argc; i++) call_args[i] = args[i]
+        return call_function(self_id, call_args, argc)
+    } else {
+        error("Unknown string method: " func_name)
+    }
+
+    return self_id
+}
+
+# @doc [arrays]
+# Built-in methods for array objects.
+# examples:
+# let arr = [1, 2, 3]
+# arr.len()  # returns 3
+# arr.append(4)  # appends 4 to the array
+# arr.extend([5, 6])  # extends the array with another array    
+function builtin_array(func_name, args, argc,  self_id, self_value) {
+    debug_msg("Executing builtin array method " func_name " with " argc " arguments")
+    self_id = args[0]
+    if (self_id == "") error("Method " func_name " called without context")
+    self_value = objects[self_id, "value"]
+
+    if (func_name == "array.len") {
+        return create_value(TYPE_INT, objects[self_id, "length"], 0)
+    } else if (func_name == "array.append") {
+        if (argc != 1) error("append expects 1 argument")
+        value_id = args[1]
+        len = objects[self_id, "length"]
+        objects[self_id, "element_" len] = value_id
+        objects[self_id, "length"] = len + 1
+        return create_value(TYPE_NULL, "null", 0)
+    } else if (func_name == "array.extend") {
+        value_id = args[1]
+        value_type = objects[value_id, "type"]
+        if (value_type != TYPE_ARRAY) error("extend argument must be array")
+        len = objects[self_id, "length"]
+        value_len = objects[value_id, "length"]
+        for (i = 0; i < value_len; i++) {
+            objects[self_id, "element_" (len + i)] = objects[value_id, "element_" i]
+        }
+        objects[self_id, "length"] = len + value_len
+        return create_value(TYPE_NULL, "null", 0)
+    } else {
+        error("Unknown array method: " func_name)
+    }
+
+    return self_id
+}
+
+# @doc [builtins]
+# Provides the unique identifier of the given value.
+# examples:
+# id(value)  # returns the unique identifier of value
+# id("hello")  # returns the unique identifier of the string "hello"
+# id(42)  # returns the unique identifier of the integer 42
+# id([1, 2, 3])  # returns the unique identifier of the array [1, 2, 3]
+function builtin_id(args, argc,   i, output) {
+    debug_msg("Executing builtin id with " argc " arguments")
+    if (argc != 1) error("type expects 1 argument")
+    return create_value(TYPE_STRING, args[1])
+}
+
+# @doc [builtins]
+# Prints one or more values to stdout.
+# examples:
+# print("Hello, World!")  # prints "Hello, World!"
+# print(value)  # prints the value
+# print(value, value2)  # prints multiple values separated by space
+# print(value, " - ", value2)   # prints values with custom separator
+# print("Value:", value, "is of type", type(value))  # prints value and its type
 function builtin_print(args, argc,   i, output) {
     debug_msg("Executing builtin print with " argc " arguments")
     output = ""
     for (i = 1; i <= argc; i++) {
-        if (i > 1) output = output " "
+        if (i > 1) output = output
         output = output value_to_string(args[i])
     }
     print output
     return create_value(TYPE_NULL, "null")
 }
 
-function builtin_typeof(args, argc,   arg_type) {
-    debug_msg("Executing builtin typeof with " argc " arguments")
-    if (argc != 1) error("typeof expects 1 argument")
+# @doc [builtins]
+# Returns the type of the given value as a string.
+# examples:
+# type(42)  # returns "int"
+# type(3.14)  # returns "float"
+# type("hello")  # returns "string"
+# type([1, 2, 3])  # returns "array"
+function builtin_type(args, argc,   arg_type) {
+    debug_msg("Executing builtin type with " argc " arguments")
+    if (argc != 1) error("type expects 1 argument")
     arg_type = objects[args[1], "type"]
     return create_value(TYPE_STRING, arg_type)
 }
 
+# @doc [math]
+# Built-in math functions.
+# examples:
+# math.sin(x)  # returns the sine of x (x in radians)
+# math.cos(x)  # returns the cosine of x (x in radians)
 function builtin_math(func_name, args, argc,   parts, result, arg, arg_type, arg1_type, arg2_type) {
     debug_msg("Executing builtin math function " func_name " with " argc " arguments")
     split(func_name, parts, ".")
@@ -1418,6 +1814,15 @@ function builtin_math(func_name, args, argc,   parts, result, arg, arg_type, arg
     return create_value(TYPE_FLOAT, result)
 }
 
+# @doc [system]
+# Built-in system functions.
+# examples:
+# system.user()  # returns the current system user
+# system.getenv("PATH")  # returns the value of the PATH environment variable
+# system.setenv("MY_VAR", "my_value")  # sets the MY_VAR environment variable to "my_value"
+# system.hostname()  # returns the system hostname
+# system.datetime()  # returns the current date and time
+# system.cwd()  # returns the current working directory
 function builtin_system(func_name, args, argc,   parts, result, arg, arg_type, arg1_type, arg2_type) {
     debug_msg("Executing builtin system function " func_name " with " argc " arguments")
     split(func_name, parts, ".")
@@ -1452,6 +1857,11 @@ function builtin_system(func_name, args, argc,   parts, result, arg, arg_type, a
     error("Unknown system function: " func_name)
 }
 
+# @doc [builtins]
+# Returns the length of a string, array, or struct.
+# examples:
+# len("hello")  # returns 5
+# len([1, 2, 3, 4])  # returns 4
 function builtin_len(args, argc,   arg, arg_type) {
     debug_msg("Executing builtin len with " argc " arguments")
     if (argc != 1) error("len expects 1 argument")
@@ -1466,64 +1876,13 @@ function builtin_len(args, argc,   arg, arg_type) {
     error("len applicable only to strings, arrays, or structs")
 }
 
-function builtin_push(args, argc,   target_id, value_id, target_type, len) {
-    debug_msg("builtin_push starts")
-    if (argc != 2) error("push expects 2 arguments")
-
-    target_id = args[1]
-    value_id = args[2]
-    target_type = objects[target_id, "type"]
-
-    if (target_type != TYPE_ARRAY) error("push applicable only to arrays")
-
-    len = objects[target_id, "length"]
-    objects[target_id, "element_" len] = value_id
-    objects[target_id, "length"] = len + 1
-
-    debug_msg("push: added element to array " target_id ", new length = " len + 1)
-    return create_value(TYPE_NULL, "null")
-}
-
-function builtin_extend(args, argc,   target_id, value_id, target_type, value_type, len, i, value_len) {
-    debug_msg("builtin_extend starts")
-    debug_msg("argc = " argc)
-
-    if (argc != 2) error("extend expects 2 arguments")
-
-    debug_msg("Getting target_id from args[1]")
-    target_id = args[1]
-    debug_msg("target_id = " target_id)
-
-    debug_msg("Getting value_id from args[2]")
-    value_id = args[2]
-    debug_msg("value_id = " value_id)
-
-    debug_msg("Getting target_type")
-    target_type = objects[target_id, "type"]
-    debug_msg("target_type = " target_type)
-
-    debug_msg("Getting value_type")
-    value_type = objects[value_id, "type"]
-    debug_msg("value_type = " value_type)
-
-    if (target_type != TYPE_ARRAY) error("extend applicable only to arrays")
-    if (value_type != TYPE_ARRAY) error("extend argument must be array")
-
-    debug_msg("Getting lengths")
-    len = objects[target_id, "length"]
-    value_len = objects[value_id, "length"]
-    debug_msg("target length = " len ", value length = " value_len)
-
-    for (i = 0; i < value_len; i++) {
-        objects[target_id, "element_" (len + i)] = objects[value_id, "element_" i]
-    }
-    
-    objects[target_id, "length"] = len + value_len
-
-    debug_msg("extend: done, new length = " (len + value_len))
-    return create_value(TYPE_NULL, "null")
-}
-
+# @doc [builtins]
+# Removes and returns the last element from an array.
+# examples:
+# let arr = [1, 2, 3]
+# let last = pop(arr)  # last = 3, arr = [1, 2]
+# let empty_arr = []
+# let last = pop(empty_arr)  # last = null, empty_arr = []
 function builtin_pop(args, argc,   target_id, target_type, len, last_index, res) {
     debug_msg("builtin_pop starts")
     if (argc != 1) error("pop expects 1 argument")
@@ -1547,6 +1906,13 @@ function builtin_pop(args, argc,   target_id, target_type, len, last_index, res)
     return res
 }
 
+# @doc [builtins]
+# Clears all elements from an array.
+# examples:
+# let arr = [1, 2, 3]
+# clear(arr)  # arr = []
+# let empty_arr = []
+# clear(empty_arr)  # empty_arr = []
 function builtin_clear(args, argc,   target_id, target_type, len, last_index, res) {
     debug_msg("builtin_clear starts")
     if (argc != 1) error("clear expects 1 argument")
@@ -1564,6 +1930,11 @@ function builtin_clear(args, argc,   target_id, target_type, len, last_index, re
     }
 }
 
+# @doc [builtins]
+# Asserts that a condition is true, otherwise raises an assertion error.
+# examples:
+# assert(x > 0, "x must be positive")  # raises error if x <= 0
+# assert(value)  # raises error if value is false or null
 function builtin_assert(args, argc,   condition, cond_type, cond_val, is_false, msg) {
     debug_msg("builtin_assert called")
     if (argc < 1) error("assert expects at least 1 argument")
@@ -1592,6 +1963,11 @@ function builtin_assert(args, argc,   condition, cond_type, cond_val, is_false, 
     return create_value(TYPE_NULL, "null")
 }
 
+# @doc [builtins]
+# Filters elements from an array based on a predicate function.
+# examples:
+# let arr = [1, 2, 3, 4, 5]
+# let even_arr = filter(arr, lambda x: x % 2 == 0)  # even_arr = [2, 4]
 function builtin_filter(args, argc,   arr_id, func_id, result_id, i, len, elem_id, filter_args, filter_result, result_count) {
     debug_msg("builtin_filter called")
     if (argc != 2) error("filter expects 2 arguments: array and function")
@@ -1638,6 +2014,11 @@ function builtin_filter(args, argc,   arr_id, func_id, result_id, i, len, elem_i
     return result_id
 }
 
+# @doc [builtins]
+# Maps elements from an array using a transformation function.
+# examples:
+# let arr = [1, 2, 3]
+# let squared_arr = map(arr, lambda x: x * x)  # squared_arr = [1, 4, 9]
 function builtin_map(args, argc,   arr_id, func_id, result_id, i, len, elem_id, map_args, map_result) {
     debug_msg("builtin_map called")
     if (argc != 2) error("map expects 2 arguments: array and function")
@@ -1677,6 +2058,11 @@ function builtin_map(args, argc,   arr_id, func_id, result_id, i, len, elem_id, 
     return result_id
 }
 
+# @doc [builtins]
+# Reduces an array to a single value using a binary function.
+# examples:
+# let arr = [1, 2, 3, 4]
+# let sum = reduce(arr, lambda acc, x: acc + x, 0)  # sum = 10
 function builtin_reduce(args, argc,   arr_id, func_id, acc_id, i, len, elem_id, reduce_args) {
     debug_msg("builtin_reduce called")
     if (argc != 3) error("reduce expects 3 arguments: array, function, and initial value")
@@ -1712,6 +2098,11 @@ function builtin_reduce(args, argc,   arr_id, func_id, acc_id, i, len, elem_id, 
     return acc_id
 }
 
+# @doc [builtins]
+# Creates an array containing a range of integers.
+# examples:
+# let arr = range(5)  # arr = [0, 1, 2, 3, 4]
+# let arr2 = range(2, 6)  # arr2 = [2, 3, 4, 5]
 function builtin_range(args, argc,   start_id, end_id, start_val, end_val, target_id, value_id, target_type, len, i) {
     debug_msg("builtin_range called")
     if (argc < 1) error("range expects at least 1 argument")
@@ -1808,6 +2199,15 @@ function parse_lambda(   lambda_node, param_count) {
     return lambda_node
 }
 
+# @doc [functions]
+# Creates a closure object for a given function definition within a specific scope.
+# examples:
+# fn external() {
+#   fn internal() {
+#       return "internal value";
+#   }
+#   internal();
+# }
 function create_closure(func_def_id, closure_scope_id,   closure_id) {
     debug_msg("Creating closure for function definition " func_def_id " with closure scope " closure_scope_id)
     closure_id = ++object_counter
@@ -1844,10 +2244,16 @@ function parse_array_literal(   array_node, elem_node, count) {
     return array_node
 }
 
+# @doc [arrays]
+# Create new array
+# examples:
+# let int_arr = [1, 2, 3]; # int array
+# let combined_array = [1, "some-string", [8734, "kek"]]; combined array
 function create_array(element_ids, count,   array_id, i) {
     debug_msg("Creating array with " count " elements")
     array_id = ++object_counter
     objects[array_id, "type"] = TYPE_ARRAY
+    objects[array_id, "object_type"] = create_object_type(TYPE_ARRAY)
     objects[array_id, "length"] = count
 
     for (i = 1; i <= count; i++) {
@@ -1887,6 +2293,14 @@ function parse_object_literal(   obj_node, key, value_node, prop_node) {
     return obj_node
 }
 
+# @doc [control_flow]
+# Try-catch statement
+# examples:
+# try {
+#   let result = riskyOperation();
+# } catch (error) {
+#   print("Error: " + error);
+# }
 function parse_try_statement(   try_node) {
     debug_msg("Parsing try statement")
     try_node = ++ast_node_counter
@@ -1978,52 +2392,42 @@ function execute_try_statement(try_node,   old_exception_handler, result_id, exc
     return result_id
 }
 
-function parse_import(   import_node, spec_imported, spec_local, spec_node, module_name, expr_stmt_node) {
+# @doc [imports]
+# Import declaration, adds it to the current program.
+# examples:
+# import math   # import math module
+# import system as sys  # import system module with alias
+# import my_module  # import custom user modele
+function parse_import(   import_node, module_name, alias_name, expr_stmt_node) {
     debug_msg("Parsing import declaration")
-
     import_node = ++ast_node_counter
     ast_nodes[import_node, "type"] = "ImportDeclaration"
     advance_token()
+    module_name = get_token_value()
+    advance_token()
 
-    if (get_token_value() == "{") {
-        debug_msg("Parsing named imports 0")
-        ast_nodes[import_node, "specifiers_count"] = 0
+    while (get_token_value() == ".") {
+        module_name = module_name "."
         advance_token()
-
-        while (get_token_value() != "}") {
-            spec_imported = get_token_value()
-            advance_token()
-
-            if (get_token_value() == "as") {
-                advance_token()
-                spec_local = get_token_value()
-                advance_token()
-            } else {
-                spec_local = spec_imported
-            }
-
-            spec_node = ++ast_node_counter
-            ast_nodes[spec_node, "type"] = "ImportSpecifier"
-            ast_nodes[spec_node, "imported"] = spec_imported
-            ast_nodes[spec_node, "local"] = spec_local
-
-            ast_nodes[import_node, "spec_" ++ast_nodes[import_node, "specifiers_count"]] = spec_node
-            ast_nodes[import_node, "specifiers_count"]++
-
-            if (get_token_value() == ",") advance_token()
-        }
-        advance_token()
-    } else {
-        debug_msg("Parsing named imports 1")
-        ast_nodes[import_node, "default"] = get_token_value()
+        module_name = module_name get_token_value()
         advance_token()
     }
 
-    expect_token("KEYWORD", "from")
+    alias_name = ""
 
-    module_name = get_token_value()
+    if (get_token_value() == "as") {
+        advance_token()
+        alias_name = get_token_value()
+        debug_msg("Parsed alias: '" alias_name "'")
+        advance_token()
+    } else {
+        debug_msg("No 'as' keyword found")
+    }
+
     ast_nodes[import_node, "source"] = module_name
-    advance_token()
+    ast_nodes[import_node, "default"] = alias_name
+
+    debug_msg("Parsed import: source='" module_name "' alias='" alias_name "'")
 
     if ((module_name) in BUILTIN_MODULES) {
         ast_nodes[import_node, "builtin"] = 1
@@ -2040,24 +2444,138 @@ function parse_import(   import_node, spec_imported, spec_local, spec_node, modu
     return expr_stmt_node
 }
 
-function execute_import_declaration(node, module_name, default_name, value_id) {
+function execute_import_declaration(node,   module_name, default_name, value_id) {
     debug_msg("Executing import declaration")
     module_name = ast_nodes[node, "source"]
 
     if (ast_nodes[node, "builtin"]) {
         value_id = init_custom_builtins(module_name)
     } else {
-        value_id = create_value(TYPE_NULL, "null")
+        value_id = load_user_module(module_name)
     }
 
-    default_name = module_name
-    if (length(ast_nodes[node, "default"]) > 0) {
-        default_name = ast_nodes[node, "default"]
-    }
+    default_name = ast_nodes[node, "default"]
 
+    if (default_name == "") default_name = module_name
     declare_variable(default_name, value_id)
-
     return create_value(TYPE_NULL, "null")
+}
+
+function load_user_module(module_name,   file_path, code, 
+                          saved_tokens, saved_token_count, saved_ast_nodes, saved_ast_counter, saved_current_token,
+                          token_count, prog_node, saved_scope, module_scope_id, 
+                          module_obj_id, i, key) {
+
+    debug_msg("Loading user module: " module_name)
+
+    file_path = resolve_module_path(module_name)
+
+    code = read_file(file_path)
+    if (code == "") {
+        error("Cannot read module file: " file_path)
+    }
+
+    saved_token_count = token_count
+    saved_ast_counter = ast_node_counter
+    saved_current_token = current_token
+
+    for (i = 1; i <= token_count; i++) {
+        saved_tokens[i, "type"] = tokens[i, "type"]
+        saved_tokens[i, "value"] = tokens[i, "value"]
+    }
+
+    for (key in ast_nodes) {
+        saved_ast_nodes[key] = ast_nodes[key]
+    }
+
+    token_count = tokenize(code)
+    prog_node = parse(tokens, token_count)
+
+    saved_scope = current_scope_id
+    module_scope_id = ++scope_counter
+    scopes[module_scope_id, "parent"] = 0
+    scopes[module_scope_id, "variables_count"] = 0
+    current_scope_id = module_scope_id
+
+    debug_msg("Created module scope: " module_scope_id)
+
+    execute(prog_node)
+    debug_msg("After executing module, checking scope " module_scope_id)
+
+    module_obj_id = collect_module_variables(module_scope_id)
+    current_scope_id = saved_scope
+
+    delete tokens
+    for (i = 1; i <= saved_token_count; i++) {
+        tokens[i, "type"] = saved_tokens[i, "type"]
+        tokens[i, "value"] = saved_tokens[i, "value"]
+    }
+    token_count = saved_token_count
+    current_token = saved_current_token
+
+    for (key in ast_nodes) {
+        saved_ast_nodes[key] = ast_nodes[key]
+    }
+
+    delete ast_nodes
+    for (key in saved_ast_nodes) {
+        ast_nodes[key] = saved_ast_nodes[key]
+    }
+
+    debug_msg("Loaded module: " module_name " as object " module_obj_id)
+    return module_obj_id
+}
+
+function collect_module_variables(scope_id,   obj_id, key, var_name, var_value, prop_count, pattern) {
+    debug_msg("Collecting variables from module scope " scope_id)
+
+    pattern = "^" scope_id SUBSEP "var_"
+    debug_msg("Looking for pattern: '" pattern "'")
+
+    obj_id = ++object_counter
+    objects[obj_id, "type"] = TYPE_OBJECT
+    objects[obj_id, "value"] = ""
+
+    prop_count = 0
+    for (key in scopes) {
+        if (key ~ pattern) {
+            prop_count++
+        }
+    }
+
+    objects[obj_id, "properties_count"] = prop_count
+    debug_msg("Module has " prop_count " properties")
+
+    prop_count = 0
+    for (key in scopes) {
+        if (key ~ pattern) {
+            var_name = key
+            sub(pattern, "", var_name)
+            var_value = scopes[key]
+
+            prop_count++
+            objects[obj_id, "prop_key_" prop_count] = var_name
+            objects[obj_id, "prop_value_" prop_count] = var_value
+        }
+    }
+
+    register_object(obj_id)
+    debug_msg("Created module object " obj_id " with " prop_count " properties")
+    return obj_id
+}
+
+function resolve_module_path(module_name,   path) {
+    gsub("\\.", "/", module_name)
+
+    if (module_name ~ /\.awkward$/) {
+        path = module_name
+    } else {
+        path = module_name ".awkward"
+    }
+
+    debug_msg("Resolved module path: " path)
+
+    return path
 }
 
 function parse_block_statement(   block_node, stmt_node) {
@@ -2100,6 +2618,12 @@ function execute_block_statement(block_node,   old_scope_id, result_id, i, stmt_
     return result_id
 }
 
+# @doc [control_flow]
+# Return statement, optionally with an expression to return.
+# examples:
+# return;   # just return
+# return 42;    # return some value
+# return x + y; # return result
 function parse_return_statement(   ret_node) {
     debug_msg("Parsing return statement")
     ret_node = ++ast_node_counter
@@ -2128,6 +2652,17 @@ function execute_return_statement(ret_node,   arg_id) {
     return return_value
 }
 
+# @doc [control_flow]
+# if statement, including optional else branch.
+# examples:
+# if (x > 0) {
+#   print(x);
+# } else {
+#   print(-x);
+# }
+# if (y == 0) {
+#   return;
+# }
 function parse_if_statement(   if_node) {
     debug_msg("Parsing if statement")
     if_node = ++ast_node_counter
@@ -2162,6 +2697,17 @@ function execute_if_statement(if_node,   test_id, test_val_id, result_id) {
     return result_id
 }
 
+# @doc [control_flow]
+# While statement, executes a block while the condition is true.
+# examples:
+# while (x > 0) {
+#     print(x);
+#     x = x - 1;
+# }
+# while (i < 10) {
+#     doSomething(i);
+#     i = i + 1;
+# }
 function parse_while_statement(   while_node) {
     debug_msg("Parsing while statement")
     while_node = ++ast_node_counter
@@ -2177,6 +2723,15 @@ function parse_while_statement(   while_node) {
     return while_node
 }
 
+# @doc [control_flow]
+# For-in statement, iterates over elements of an array or iterable object.
+# examples:
+# for (let x in [1, 2, 3]) {
+#     print(x);
+# }
+# for (let item in myArray) {
+#     process(item);
+# }
 function parse_for_statement(   for_node) {
     debug_msg("Parsing for-in statement")
     for_node = ++ast_node_counter
@@ -2314,6 +2869,15 @@ function to_bool(val_id,   type, val) {
     return 1
 }
 
+# @doc [functions]
+# Declares a function with a name and parameters.
+# examples:
+# fn add(a, b) {
+#     return a + b;
+# }
+# fn greet(name) {
+#     print("Hello, " + name);
+# }
 function parse_function_declaration(   func_node) {
     debug_msg("Parsing function declaration")
     func_node = ++ast_node_counter
@@ -2344,6 +2908,7 @@ function execute_function_declaration(func_node,   func_name, func_id) {
     debug_msg("Executing function declaration for " ast_nodes[func_node, "name"])
     func_name = ast_nodes[func_node, "name"]
     func_id = create_closure(func_node, current_scope_id)
+    objects[func_id, "name"] = func_name
     declare_variable(func_name, func_id)
     return create_value(TYPE_NULL, "null")
 }
@@ -2393,6 +2958,11 @@ function parse_expression_statement(   expr_stmt_node) {
     return expr_stmt_node
 }
 
+# @doc [expressions]
+# Logical OR expression `||`
+# examples:
+# let result = a || b;
+# let combined = (x > 0) || (y < 5);
 function parse_logical_or(   lor_left, op, lor_right, lor_node) {
     lor_left = parse_logical_and()
 
@@ -2412,6 +2982,11 @@ function parse_logical_or(   lor_left, op, lor_right, lor_node) {
     return lor_left
 }
 
+# @doc [expressions]
+# Logical AND expression `&&`
+# examples:
+# let result = a && b;
+# let combined = (x > 0) && (y < 5);
 function parse_logical_and(   land_left, op, land_right, land_node) {
     land_left = parse_equality()
 
@@ -2431,6 +3006,12 @@ function parse_logical_and(   land_left, op, land_right, land_node) {
     return land_left
 }
 
+# @doc [expressions]
+# Equality expression, supporting '==' and '!=' operators.
+# examples:
+# let result = a == b;
+# let result = x != y;
+# let flag = (a + b) == (c * d);
 function parse_equality(   eq_left, op, eq_right, eq_node) {
     debug_msg("Parsing equality expression")
     eq_left = parse_relational()
@@ -2451,6 +3032,12 @@ function parse_equality(   eq_left, op, eq_right, eq_node) {
     return eq_left
 }
 
+# @doc [expressions]
+# Relational expression, supporting '<', '>', '<=', and '>=' operators.
+# examples:
+# let is_greater = a > b;
+# let is_smaller_or_equal = x <= y;
+# let result = (a + b) >= (c - d);
 function parse_relational(   rel_left, op, rel_right, rel_node) {
     rel_left = parse_additive()
 
@@ -2471,6 +3058,12 @@ function parse_relational(   rel_left, op, rel_right, rel_node) {
     return rel_left
 }
 
+# @doc [expressions]
+# Additive expression, supporting '+' and '-' operators.
+# examples:
+# let result = a + b;
+# let total = x - y;
+# let value = (a + b) - (c + d);
 function parse_additive(   add_left, op, add_right, add_node) {
     add_left = parse_multiplicative()
 
@@ -2490,6 +3083,12 @@ function parse_additive(   add_left, op, add_right, add_node) {
     return add_left
 }
 
+# @doc [expressions]
+# Multiplicative expression, supporting '*', '/', and '%' operators.
+# examples:
+# let product = a * b;
+# let quotient = x / y;
+# let remainder = n % 3;
 function parse_multiplicative(   mul_left, op, mul_right, mul_node) {
     mul_left = parse_primary()
 
@@ -2536,10 +3135,29 @@ function parse_primary(   prim_type, prim_value, prim_node, left, name, expr, op
             error("Expected identifier after 'new'")
         }
         name = get_token_value()
+        callee_node = create_identifier_node(name)
         advance_token()
+
+        while (get_token_value() == ".") {
+            advance_token()
+            if (get_token_type() != "IDENTIFIER") {
+                error("Expected identifier after '.'")
+            }
+            property_name = get_token_value()
+
+            member_node = ++ast_node_counter
+            ast_nodes[member_node, "type"] = "MemberExpression"
+            ast_nodes[member_node, "object"] = callee_node
+            ast_nodes[member_node, "property"] = create_identifier_node(property_name)
+            ast_nodes[member_node, "computed"] = 0
+
+            callee_node = member_node
+            advance_token()
+        }
+
         call_node = ++ast_node_counter
         ast_nodes[call_node, "type"] = "CallExpression"
-        ast_nodes[call_node, "callee_node"] = create_identifier_node(name)
+        ast_nodes[call_node, "callee_node"] = callee_node
         ast_nodes[call_node, "args_count"] = 0
         if (get_token_value() == "{") {
             arg_node = parse_object_literal()
@@ -2742,20 +3360,49 @@ function expect_token(expected_type, expected_value) {
     advance_token()
 }
 
+function read_file(filename,   code, line, ret) {
+    code = ""
+    while ((ret = (getline line < filename)) > 0) {
+        code = code line "\n"
+    }
+    close(filename)
+
+    if (ret < 0) {
+        return ""
+    }
+    return code
+}
+
+function realpath_dir(filename,   abs, dir) {
+    cmd = "realpath " shellquote(filename)
+    cmd | getline abs
+    close(cmd)
+
+    dir = abs
+    sub(/\/[^\/]*$/, "/", dir)
+
+    return dir
+}
+
+function shellquote(s) {
+    gsub(/'/, "'\\''", s)
+    return "'" s "'"
+}
+
 function execute_program(filename,   code, line, token_count, prog_node, result, start_time, end_time, time_diff) {
     if (debug) {
         start_time = _now()
         debug_msg("Executing program from file " filename)
     }
 
-    code = ""
-    while ((getline line < filename) > 0) {
-        code = code line "\n"
-    }
-    close(filename)
+    code = read_file(filename)
+    debug_msg("Read file, code length: " length(code))
 
     token_count = tokenize(code)
+    debug_msg("Tokenized, token count: " token_count)
+    dir_path = realpath_dir(filename)
     prog_node = parse(tokens, token_count)
+    debug_msg("Parsed, prog_node: " prog_node)
     result = execute(prog_node)
 
     if (debug) {
@@ -2874,4 +3521,12 @@ function _now(   t, status) {
     "date +%s" | getline t
     close("date +%s")
     return t + 0.0
+}
+
+function ucfirst(s) {
+    return toupper(substr(s,1,1)) substr(s,2)
+}
+
+function create_object_type(type) {
+    return "Awkward" ucfirst(type) "Object"
 }

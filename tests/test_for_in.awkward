@@ -6,7 +6,7 @@ for (let i in arr1) {
 }
 
 for (let i in arr2) {
-    if (typeof(arr2[i]) == "array") {
+    if (type(arr2[i]) == "array") {
         for(let j in arr2[i]) {
             print(arr2[i][j]);
         }

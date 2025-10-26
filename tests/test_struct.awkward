@@ -58,16 +58,16 @@ let some_storage = new Storage{data=[]};
 
 print(some_storage.data);
 
-extend(some_storage.data, [1, 2, 3]);
+some_storage.data.extend([1, 2, 3]);
 
 print(some_storage.data);
 
 for (let i in some_storage) {
-    print(i, some_storage[i]);
-    if (typeof(some_storage[i]) == "array") {
+    print(i, " ", some_storage[i]);
+    if (type(some_storage[i]) == "array") {
         print("struct value is array");
         for (let j in some_storage[i]) {
-            print("struct data value by", j "is", some_storage[i][j]);
+            print("struct data value by ", j " is ", some_storage[i][j]);
         }
     }
 }

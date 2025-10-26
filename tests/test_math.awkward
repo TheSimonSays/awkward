@@ -1,4 +1,4 @@
-import m from math
+import math as m
 
 
 print(m.tan(2));
