@@ -1,0 +1,25 @@
+import fs
+
+let path = "/tmp/awkward_test_fs.txt";
+fs.remove(path);
+print(fs.exists(path));
+print(fs.copy("/dev/null", path));
+print(fs.exists(path));
+print(fs.isfile(path));
+print(fs.isdir(path));
+
+let path2 = "/tmp/awkward_test_fs2.txt";
+fs.remove(path2);
+print(fs.rename(path, path2));
+print(fs.exists(path));
+print(fs.exists(path2));
+print(fs.remove(path2));
+print(fs.exists(path2));
+
+let dir = "/tmp/awkward_test_fs_dir";
+fs.rmdir(dir);
+print(fs.mkdir(dir));
+print(fs.isdir(dir));
+print(fs.isfile(dir));
+print(fs.rmdir(dir));
+print(fs.isdir(dir));

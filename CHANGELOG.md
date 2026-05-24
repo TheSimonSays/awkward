@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2] - 2026-05-24
+
+### Added
+
+- Built-in `http` module for http requests
+- Built-in `io` module for file streams
+- Built-in `fs` module for filesystem operations
+- `string.split(separator)` method that splits a string into an array
+- Escape sequence handling in string literals
+- Tests for fs, io and http modules
+
+### Changed
+
+- Binary expression evaluation reworked
+- Struct comparison and several debug paths refactored...
+
 ## [0.1.1] - 2025-10-26
 
 ### Added

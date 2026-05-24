@@ -27,7 +27,7 @@ function debug_msg(msg) {
 }
 
 function init_interpreter() {
-    VERSION = "0.1.1"
+    VERSION = "0.1.2"
 
     debug_msg("Initializing awkward interpreter version " VERSION)
 
@@ -65,7 +65,12 @@ function init_interpreter() {
 
     BUILTIN_MODULES["math"] = 1
     BUILTIN_MODULES["system"] = 1
+    BUILTIN_MODULES["io"] = 1
+    BUILTIN_MODULES["fs"] = 1
+    BUILTIN_MODULES["http"] = 1
     BUILTIN_MODULES["kek"] = 1
+
+    http_request_counter = 0
 
     STRING_METHODS["upper"] = "string.upper"
     STRING_METHODS["lower"] = "string.lower"
@@ -164,11 +169,35 @@ function tokenize(code,   token_count, pos, token_found, current_char, substr_co
     debug_msg("Tokenization complete, found " token_count " tokens")
     if (debug) {
         for (token in tokens) {
-            debug_msg(token " token= " tokens[token])
+            if (debug) debug_msg(token " token= " tokens[token])
         }
     }
 
     return token_count
+}
+
+function unescape_string(s,    out, i, n, c, next_c) {
+    out = ""
+    n = length(s)
+    i = 1
+    while (i <= n) {
+        c = substr(s, i, 1)
+        if (c == "\\" && i < n) {
+            next_c = substr(s, i + 1, 1)
+            if (next_c == "n") out = out "\n"
+            else if (next_c == "t") out = out "\t"
+            else if (next_c == "r") out = out "\r"
+            else if (next_c == "\\") out = out "\\"
+            else if (next_c == "\"") out = out "\""
+            else if (next_c == "0") out = out sprintf("%c", 0)
+            else out = out c next_c
+            i += 2
+        } else {
+            out = out c
+            i++
+        }
+    }
+    return out
 }
 
 function parse(tokens_array, token_cnt,   prog_node) {
@@ -319,6 +348,11 @@ function execute_pipe(node_id,   left_value, right_node, right_type, func_id, ar
         } else {
             return call_function(func_id, args, argc + 1)
         }
+    } else if (right_type == "LambdaExpression") {
+        func_id = execute(right_node)
+        delete args
+        args[1] = left_value
+        return call_lambda(func_id, args, 1)
     }
 
     error("Invalid pipe right side: " right_type)
@@ -736,17 +770,14 @@ function update_variable(name, value,   scope_id, key) {
     error("Assignment to undeclared variable " name)
 }
 
-function get_variable(name,   scope_id, key, parent_id) {
+function get_variable(name,   scope_id, key) {
+    key = "var_" name
     scope_id = current_scope_id
-    debug_msg("Resolving variable " name " starting from scope " scope_id)
     while (scope_id != 0) {
-        key = "var_" name
         if ((scope_id, key) in scopes) {
-            debug_msg("Found variable " name " in scope " scope_id)
             return scopes[scope_id, key]
         }
-        parent_id = scopes[scope_id, "parent"]
-        scope_id = parent_id
+        scope_id = scopes[scope_id, "parent"]
     }
     error("Variable not found: " name)
 }
@@ -789,58 +820,58 @@ function execute(node_id,   node_type) {
     node_type = ast_nodes[node_id, "type"]
     debug_msg("Executing node " node_id " of type " node_type)
 
-    if (node_type == "Program") {
-        return execute_program_node(node_id)
-    } else if (node_type == "VariableDeclaration") {
-        return execute_variable_declaration(node_id)
-    } else if (node_type == "AssignmentExpression") {
-        return execute_assignment(node_id)
+    if (node_type == "Identifier") {
+        return get_variable(ast_nodes[node_id, "name"])
     } else if (node_type == "BinaryExpression") {
         return execute_binary_expression(node_id)
-    } else if (node_type == "CallExpression") {
-        return execute_function_call(node_id)
-    } else if (node_type == "Identifier") {
-        return resolve_identifier(ast_nodes[node_id, "name"])
     } else if (node_type == "Literal") {
         return create_value(ast_nodes[node_id, "value_type"], ast_nodes[node_id, "value"])
+    } else if (node_type == "CallExpression") {
+        return execute_function_call(node_id)
     } else if (node_type == "ExpressionStatement") {
         return execute(ast_nodes[node_id, "expression"])
+    } else if (node_type == "ReturnStatement") {
+        return execute_return_statement(node_id)
+    } else if (node_type == "IfStatement") {
+        return execute_if_statement(node_id)
+    } else if (node_type == "BlockStatement") {
+        return execute_block_statement(node_id)
+    } else if (node_type == "AssignmentExpression") {
+        return execute_assignment(node_id)
+    } else if (node_type == "MemberExpression") {
+        return execute_member_expression(node_id)
+    } else if (node_type == "VariableDeclaration") {
+        return execute_variable_declaration(node_id)
+    } else if (node_type == "WhileStatement") {
+        return execute_while_statement(node_id)
+    } else if (node_type == "ForInStatement") {
+        return execute_for_in_statement(node_id)
+    } else if (node_type == "ArrayExpression") {
+        return execute_array_expression(node_id)
+    } else if (node_type == "ObjectExpression") {
+        return execute_object_expression(node_id)
+    } else if (node_type == "BreakStatement") {
+        return execute_break_statement(node_id)
+    } else if (node_type == "ContinueStatement") {
+        return execute_continue_statement(node_id)
     } else if (node_type == "TryStatement") {
         return execute_try_statement(node_id)
+    } else if (node_type == "LambdaExpression") {
+        return execute_lambda(node_id)
+    } else if (node_type == "PipeExpression") {
+        return execute_pipe(node_id)
     } else if (node_type == "FunctionDeclaration") {
         return execute_function_declaration(node_id)
     } else if (node_type == "StructDeclaration") {
         return execute_struct_declaration(node_id)
     } else if (node_type == "ImplDeclaration") {
         return execute_impl_declaration(node_id)
-    } else if (node_type == "BlockStatement") {
-        return execute_block_statement(node_id)
-    } else if (node_type == "ReturnStatement") {
-        return execute_return_statement(node_id)
-    } else if (node_type == "IfStatement") {
-        return execute_if_statement(node_id)
-    } else if (node_type == "WhileStatement") {
-        return execute_while_statement(node_id)
-    } else if (node_type == "ForInStatement") {
-        return execute_for_in_statement(node_id)
-    } else if (node_type == "BreakStatement") {
-        return execute_break_statement(node_id)
-    } else if (node_type == "ContinueStatement") {
-        return execute_continue_statement(node_id)
-    } else if (node_type == "ArrayExpression") {
-        return execute_array_expression(node_id)
-    } else if (node_type == "ObjectExpression") {
-        return execute_object_expression(node_id)
-    } else if (node_type == "MemberExpression") {
-        return execute_member_expression(node_id)
-    } else if (node_type == "ImportDeclaration") {
-        return execute_import_declaration(node_id)
-    } else if (node_type == "LambdaExpression") {
-        return execute_lambda(node_id)
-    } else if (node_type == "PipeExpression") {
-        return execute_pipe(node_id)
     } else if (node_type == "EnumDeclaration") {
         return execute_enum_declaration(node_id)
+    } else if (node_type == "ImportDeclaration") {
+        return execute_import_declaration(node_id)
+    } else if (node_type == "Program") {
+        return execute_program_node(node_id)
     }
     error("Unknown node type: " node_type)
 }
@@ -966,80 +997,87 @@ function execute_assignment(assign_node,   left_id, right_id, left_name, result_
     error("Left side of assignment must be an identifier or member expression")
 }
 
-function execute_binary_expression(bin_node,   left_id, right_id, op, left_val_id, right_val_id, result_type, result_val) {
-    debug_msg("Executing binary expression with operator " ast_nodes[bin_node, "operator"])
-    left_id = ast_nodes[bin_node, "left"]
-    right_id = ast_nodes[bin_node, "right"]
+function execute_binary_expression(bin_node,   op, left_val_id, right_val_id, result_type, result_val, lt, rt, lv, rv) {
     op = ast_nodes[bin_node, "operator"]
+    debug_msg("Executing binary expression with operator " op)
 
-    left_val_id = execute(left_id)
-    right_val_id = execute(right_id)
+    left_val_id  = execute(ast_nodes[bin_node, "left"])
+    right_val_id = execute(ast_nodes[bin_node, "right"])
 
-    result_type = type_check(left_val_id, right_val_id, op)
+    lt = objects[left_val_id, "type"]
+    rt = objects[right_val_id, "type"]
+    lv = objects[left_val_id, "value"]
+    rv = objects[right_val_id, "value"]
 
     if (op == "+") {
-        if (result_type == TYPE_STRING) {
+        if (lt == TYPE_STRING || rt == TYPE_STRING) {
+            result_type = TYPE_STRING
             result_val = value_to_string(left_val_id) value_to_string(right_val_id)
-        } else if (result_type == TYPE_INT) {
-            result_val = objects[left_val_id, "value"] + objects[right_val_id, "value"]
-        } else if (result_type == TYPE_FLOAT) {
-            result_val = objects[left_val_id, "value"] + objects[right_val_id, "value"]
+        } else if (lt == TYPE_FLOAT || rt == TYPE_FLOAT) {
+            result_type = TYPE_FLOAT
+            result_val = lv + rv
+        } else {
+            result_type = TYPE_INT
+            result_val = lv + rv
         }
     } else if (op == "-") {
-        result_val = objects[left_val_id, "value"] - objects[right_val_id, "value"]
+        result_type = (lt == TYPE_FLOAT || rt == TYPE_FLOAT) ? TYPE_FLOAT : TYPE_INT
+        result_val = lv - rv
     } else if (op == "*") {
-        result_val = objects[left_val_id, "value"] * objects[right_val_id, "value"]
-    } else if (op == "/") {
-        if (objects[right_val_id, "value"] == 0) {
-            error("Division by zero")
-            result_val = 0
-        } else {
-            result_val = objects[left_val_id, "value"] / objects[right_val_id, "value"]
-        }
-    } else if (op == "%") {
-        if (objects[right_val_id, "value"] == 0) {
-            error("Modulo by zero")
-            result_val = 0
-        } else {
-            result_val = int(objects[left_val_id, "value"]) % int(objects[right_val_id, "value"])
-        }
+        result_type = (lt == TYPE_FLOAT || rt == TYPE_FLOAT) ? TYPE_FLOAT : TYPE_INT
+        result_val = lv * rv
+    } else if (op == "<") {
+        result_type = TYPE_BOOL
+        result_val = (lv < rv)
+    } else if (op == ">") {
+        result_type = TYPE_BOOL
+        result_val = (lv > rv)
+    } else if (op == "<=") {
+        result_type = TYPE_BOOL
+        result_val = (lv <= rv)
+    } else if (op == ">=") {
+        result_type = TYPE_BOOL
+        result_val = (lv >= rv)
     } else if (op == "==") {
         result_type = TYPE_BOOL
-
-        left_type  = objects[left_val_id, "type"]
-        right_type = objects[right_val_id, "type"]
-
-        if (left_type == TYPE_STRUCT && right_type == TYPE_STRUCT) {
+        if (lt == TYPE_STRUCT && rt == TYPE_STRUCT) {
             result_val = compare_structs(left_val_id, right_val_id)
-        } else if (left_type == TYPE_ARRAY && right_type == TYPE_ARRAY) {
+        } else if (lt == TYPE_ARRAY && rt == TYPE_ARRAY) {
             result_val = compare_arrays(left_val_id, right_val_id)
         } else {
-            result_val = (objects[left_val_id, "value"] == objects[right_val_id, "value"])
+            result_val = (lv == rv)
         }
     } else if (op == "!=") {
         result_type = TYPE_BOOL
-        result_val = (objects[left_val_id, "value"] != objects[right_val_id, "value"])
-    } else if (op == "<") {
-        result_type = TYPE_BOOL
-        result_val = (objects[left_val_id, "value"] < objects[right_val_id, "value"])
-    } else if (op == ">") {
-        result_type = TYPE_BOOL
-        result_val = (objects[left_val_id, "value"] > objects[right_val_id, "value"])
-    } else if (op == "<=") {
-        result_type = TYPE_BOOL
-        result_val = (objects[left_val_id, "value"] <= objects[right_val_id, "value"])
-    } else if (op == ">=") {
-        result_type = TYPE_BOOL
-        result_val = (objects[left_val_id, "value"] >= objects[right_val_id, "value"])
+        result_val = (lv != rv)
+    } else if (op == "/") {
+        if (rv == 0) {
+            error("Division by zero")
+            result_val = 0
+        } else {
+            result_val = lv / rv
+        }
+        result_type = (lt == TYPE_FLOAT || rt == TYPE_FLOAT) ? TYPE_FLOAT : TYPE_INT
+    } else if (op == "%") {
+        if (rv == 0) {
+            error("Modulo by zero")
+            result_val = 0
+        } else {
+            result_val = int(lv) % int(rv)
+        }
+        result_type = TYPE_INT
     } else if (op == "&&") {
         result_type = TYPE_BOOL
-        result_val = (objects[left_val_id, "value"] && objects[right_val_id, "value"])
+        result_val = (lv && rv)
     } else if (op == "||") {
         result_type = TYPE_BOOL
-        result_val = (objects[left_val_id, "value"] || objects[right_val_id, "value"])
+        result_val = (lv || rv)
     } else {
         error("Unknown operator: " op)
     }
+
+    if (lt == "" || rt == "")
+        error("Type check on invalid value")
 
     return create_value(result_type, result_val)
 }
@@ -1072,17 +1110,18 @@ function compare_structs(left_id, right_id,   left_count, right_count, i, j, mat
                     if (objects[val_l, "value"] != objects[val_r, "value"])
                         return 0
                 }
-                match_ = create_value(TYPE_BOOL, "false")
+                match_ = 1
                 break
             }
         }
 
-        if (!match_)
-            debug_msg("compare_structs: mismatch on key " key1)
-            return create_value(TYPE_BOOL, "false")
+        if (!match_) {
+            debug_msg("compare_structs: mismatch on key " key_l)
+            return 0
+        }
     }
 
-    return create_value(TYPE_BOOL, "true")
+    return 1
 }
 
 function compare_arrays(id1, id2,    len1, len2, i, el1, el2) {
@@ -1103,17 +1142,17 @@ function compare_arrays(id1, id2,    len1, len2, i, el1, el2) {
 
         if (objects[el1, "type"] != objects[el2, "type"]) {
             debug_msg("compare_arrays: element " i " type mismatch: " objects[el1, "type"] " vs " objects[el2, "type"])
-            return create_value(TYPE_BOOL, "false")
+            return 0
         }
 
         if (objects[el1, "value"] != objects[el2, "value"]) {
             debug_msg("compare_arrays: element " i " value mismatch: " \
                       objects[el1, "value"] " vs " objects[el2, "value"])
-            return create_value(TYPE_BOOL, "false")
+            return 0
         }
     }
 
-    return create_value(TYPE_BOOL, "true")
+    return 1
 }
 
 function execute_function_call(call_node,   callee_node, args, argc, i, arg_id, result_id, val_id, parts, val_value) {
@@ -1212,22 +1251,18 @@ function execute_program_node(prog_node,   result_id, i, stmt_node) {
     return result_id
 }
 
-function create_value(type, val, register,   obj_id, object_type) {
-    debug_msg("Creating value of type " type " with value " val " (register=" register ")")
+function create_value(type, val, register,   obj_id) {
     if (register == "") register = 1
-
-    debug_msg("Creating value of type " type " with value " val)
     obj_id = ++object_counter
     objects[obj_id, "type"] = type
     objects[obj_id, "value"] = val
     if (type == TYPE_STRING) {
         objects[obj_id, "length"] = length(val)
     }
-    object_type = create_object_type(type)
-    objects[obj_id, "object_type"] = object_type
-    if (register)
-        register_object(obj_id)
-    debug_msg("Created value of type " type " with id " obj_id " with object type " object_type " (registered=" register ")")
+    if (register && obj_id % gc_threshold == 0) {
+        garbage_collect()
+    }
+    debug_msg("Created value of type " type " with id " obj_id " (registered=" register ")")
     return obj_id
 }
 
@@ -1379,6 +1414,7 @@ function init_builtin_methods() {
     METHODS[TYPE_STRING, "upper"] = "string.upper"
     METHODS[TYPE_STRING, "lower"] = "string.lower"
     METHODS[TYPE_STRING, "len"]   = "string.len"
+    METHODS[TYPE_STRING, "split"]   = "string.split"
 
     METHODS[TYPE_ARRAY, "append"] = "array.append"
     METHODS[TYPE_ARRAY, "extend"] = "array.extend"
@@ -1505,6 +1541,15 @@ function init_custom_builtins(module_name,  obj_id) {
     } else if (module_name == "system") {
         obj_id = create_system_module()
         return obj_id
+    } else if (module_name == "io") {
+        obj_id = create_io_module()
+        return obj_id
+    } else if (module_name == "fs") {
+        obj_id = create_fs_module()
+        return obj_id
+    } else if (module_name == "http") {
+        obj_id = create_http_module()
+        return obj_id
     } else if (module_name == "kek") {
         obj_id = create_kek_module()
         return obj_id
@@ -1593,6 +1638,63 @@ function create_system_module(obj_id, fun_id, i) {
     return obj_id
 }
 
+function create_io_module(obj_id, fun_id, methods, i) {
+    debug_msg("Creating io module")
+    obj_id = create_object()
+    objects[obj_id, "type"] = TYPE_STRUCT
+    objects[obj_id, "struct_name"] = "io"
+
+    methods = "open read write close"
+    split(methods, funcs, " ")
+    objects[obj_id, "properties_count"] = length(funcs)
+
+    for (i = 1; i <= length(funcs); i++) {
+        objects[obj_id, "prop_key_" i] = funcs[i]
+        fun_id = create_value(TYPE_FUNCTION, "builtin:io." funcs[i])
+        objects[obj_id, "prop_value_" i] = fun_id
+    }
+
+    return obj_id
+}
+
+function create_fs_module(obj_id, fun_id, methods, i) {
+    debug_msg("Creating fs module")
+    obj_id = create_object()
+    objects[obj_id, "type"] = TYPE_STRUCT
+    objects[obj_id, "struct_name"] = "fs"
+
+    methods = "exists isfile isdir mkdir remove rmdir rename copy list size"
+    split(methods, funcs, " ")
+    objects[obj_id, "properties_count"] = length(funcs)
+
+    for (i = 1; i <= length(funcs); i++) {
+        objects[obj_id, "prop_key_" i] = funcs[i]
+        fun_id = create_value(TYPE_FUNCTION, "builtin:fs." funcs[i])
+        objects[obj_id, "prop_value_" i] = fun_id
+    }
+
+    return obj_id
+}
+
+function create_http_module(obj_id, fun_id, methods, i) {
+    debug_msg("Creating http module")
+    obj_id = create_object()
+    objects[obj_id, "type"] = TYPE_STRUCT
+    objects[obj_id, "struct_name"] = "http"
+
+    methods = "get post put delete patch head url_encode json_parse json_stringify"
+    split(methods, funcs, " ")
+    objects[obj_id, "properties_count"] = length(funcs)
+
+    for (i = 1; i <= length(funcs); i++) {
+        objects[obj_id, "prop_key_" i] = funcs[i]
+        fun_id = create_value(TYPE_FUNCTION, "builtin:http." funcs[i])
+        objects[obj_id, "prop_value_" i] = fun_id
+    }
+
+    return obj_id
+}
+
 function create_kek_module(obj_id,  kek_value_id) {
     obj_id = create_object()
     objects[obj_id, "type"] = TYPE_STRUCT
@@ -1656,6 +1758,9 @@ function call_builtin(func_name, args, argc) {
     # builins modules
     if (func_name ~ /^math\./) return builtin_math(func_name, args, argc)
     if (func_name ~ /^system\./) return builtin_system(func_name, args, argc)
+    if (func_name ~ /^io\./) return builtin_io(func_name, args, argc)
+    if (func_name ~ /^fs\./) return builtin_fs(func_name, args, argc)
+    if (func_name ~ /^http\./) return builtin_http(func_name, args, argc)
     if (func_name ~ /^kek\./) return builtin_kek(func_name, args, argc)
 
     # builins object methods
@@ -1673,6 +1778,8 @@ function call_builtin(func_name, args, argc) {
 # str.upper()  # returns "HELLO"
 # str.lower()  # returns "hello"
 # str.len()    # returns 5
+# let str = "hello, world";
+# str.split(",")    # returns [hello, world]
 function builtin_string(func_name, args, argc,  self_id, self_value, result) {
     debug_msg("Executing builtin string method " func_name " with " argc " arguments")
     self_id = args[0]
@@ -1685,12 +1792,35 @@ function builtin_string(func_name, args, argc,  self_id, self_value, result) {
         result = tolower(self_value)
     } else if (func_name == "string.len") {
         return create_value(TYPE_INT, objects[self_id, "length"], 0)
-    } else {
+    } else if (func_name == "string.split") {
+        return split_string(self_value, args)
+    }
+    else {
         error("Unknown string method: " func_name)
     }
 
     objects[self_id, "value"] = result
     return self_id
+}
+
+function split_string(self_value, args,   delimiter_id, delimiter_value, result_array, i, part, output_id) {
+    debug_msg("Splitting string id " self_id)
+    delimiter_id = args[1]
+    
+    delimiter_value = " "
+    if (delimiter_id != "") {
+        delimiter_value = objects[delimiter_id, "value"]
+    }
+
+    split(self_value, result_array, delimiter_value)
+    
+    result_array_len = length(result_array)
+
+    for (i = 1; i <= result_array_len; i++) {
+        element_ids[i] = create_value(TYPE_STRING, result_array[i])
+    }
+
+    return create_array(element_ids, result_array_len)
 }
 
 # @doc [functions]
@@ -1878,6 +2008,614 @@ function builtin_system(func_name, args, argc,   parts, result, arg, arg_type, a
         return create_value(TYPE_STRING, result)
     }
     error("Unknown system function: " func_name)
+}
+
+# @doc [io]
+# Built-in io functions.
+# examples:
+# io.open("file_name", "mode")  # opens file and return stream id
+# io.read("stream_id")  # reads content from stream
+# io.write("stream_id", "data")  # writes content to stream
+# io.close("stream_id")  # closes stream by id
+function builtin_io(func_name, args, argc,   parts, stream_id, path, mode, data) {
+    split(func_name, parts, ".")
+    
+    if (parts[2] == "open") {
+        if (argc != 2) error("open expects 2 arguments")
+        path = objects[args[1], "value"]
+        mode = objects[args[2], "value"]
+        stream_id = io_open(path, mode)
+        return create_value(TYPE_INT, stream_id)
+    }
+    else if (parts[2] == "read") {
+        if (argc < 1) error("read expects 1 argument at least")
+        stream_id = objects[args[1], "value"]
+        bytes = objects[args[2], "value"]
+        data = io_read(stream_id, bytes, mode)
+        return create_value(TYPE_STRING, data)
+    }
+    else if (parts[2] == "write") {
+        if (argc != 2) error("write expects 2 arguments")
+        stream_id = objects[args[1], "value"]
+        data = objects[args[2], "value"]
+        bytes = io_write(stream_id, data, mode)
+        return create_value(TYPE_INT, bytes)
+    }
+    else if (parts[2] == "close") {
+        if (argc != 1) error("close expects 1 argument")
+        stream_id = objects[args[1], "value"]
+        io_close(stream_id)
+        return create_value(TYPE_NULL, "null")
+    }
+    
+    error("Unknown io function: " func_name)
+}
+
+function io_open(path, mode,   stream_id, test_line) {
+    stream_id = ++STREAM_COUNT
+
+    if (mode == "r") {
+        if ((getline test_line < path) < 0) {
+            error("Failed to open file for reading: " path)
+        }
+        close(path)
+        STREAMS[stream_id, "path"] = path
+        STREAMS[stream_id, "mode"] = "r"
+    } else if (mode == "w" || mode == "a") {
+        if ((getline test_line < path) < 0) {
+            error("Failed to open file for writing: " path)
+        }
+        close(path)
+        STREAMS[stream_id, "path"] = path
+        STREAMS[stream_id, "mode"] = mode
+    } else {
+        error("Unknown mode: " mode)
+    }
+    return stream_id
+}
+
+function io_read(stream_id, max_bytes,   mode, path, data, line, bytes_read, read_all, ret) {
+    if (STREAMS[stream_id, "path"] == "") {
+        error("Invalid stream id for reading: " stream_id)
+    }
+
+    path = STREAMS[stream_id, "path"]
+    mode = STREAMS[stream_id, "mode"]
+    data = ""
+    bytes_read = 0
+    read_all = (max_bytes == "" || max_bytes == 0)
+
+    while ((read_all || bytes_read < max_bytes) && ((ret = (getline line < path)) > 0)) {
+        if (data != "") data = data "\n"
+        data = data line
+        bytes_read += length(line) + 1
+        if (!read_all && bytes_read >= max_bytes) break
+    }
+    if (ret == 0) {
+        close(path)
+    }
+
+    return data
+}
+
+function io_write(stream_id, data,   mode, path, old_data, new_data, bytes) {
+    if (STREAMS[stream_id, "path"] == "") {
+        error("Invalid stream id: " stream_id)
+    }
+    mode = STREAMS[stream_id, "mode"]
+    if (STREAMS[stream_id, "path"] == "") {
+        error("Invalid stream id: " stream_id)
+    }
+    
+    path = STREAMS[stream_id, "path"]
+    bytes = length(data)
+
+    if (mode == "w") {
+        print data > path
+        fflush(path)
+    } else if (mode == "a") {
+        print data >> path
+    } else {
+        error("Cannot write to stream opened for reading")
+    }
+    
+    return bytes
+}
+
+function io_close(stream_id,   path) {
+    if (STREAMS[stream_id, "path"] == "") {
+        error("Invalid stream id: " stream_id)
+    }
+
+    path = STREAMS[stream_id, "path"]
+    close(path)
+
+    delete STREAMS[stream_id, "path"]
+    delete STREAMS[stream_id, "mode"]
+}
+
+function builtin_fs(func_name, args, argc,   parts, path, cmd, result, line) {
+    split(func_name, parts, ".")
+    
+    if (parts[2] == "exists") {
+        if (argc != 1) error("exists expects 1 argument")
+        path = objects[args[1], "value"]
+        result = (getline < path)
+        close(path)
+        return create_value(TYPE_BOOL, result != -1)
+    }
+    else if (parts[2] == "isfile") {
+        if (argc != 1) error("isfile expects 1 argument")
+        path = objects[args[1], "value"]
+        cmd = "test -f " shell_escape(path) " && echo 1 || echo 0"
+        cmd | getline result
+        close(cmd)
+        return create_value(TYPE_BOOL, result == 1)
+    }
+    else if (parts[2] == "isdir") {
+        if (argc != 1) error("isdir expects 1 argument")
+        path = objects[args[1], "value"]
+        cmd = "test -d " shell_escape(path) " && echo 1 || echo 0"
+        cmd | getline result
+        close(cmd)
+        return create_value(TYPE_BOOL, result == 1)
+    }
+    else if (parts[2] == "mkdir") {
+        if (argc != 1) error("mkdir expects 1 argument")
+        path = objects[args[1], "value"]
+        result = system("mkdir -p " shell_escape(path))
+        return create_value(TYPE_INT, result)
+    }
+    else if (parts[2] == "remove") {
+        if (argc != 1) error("remove expects 1 argument")
+        path = objects[args[1], "value"]
+        result = system("rm -f " shell_escape(path))
+        return create_value(TYPE_INT, result)
+    }
+    else if (parts[2] == "rmdir") {
+        if (argc != 1) error("rmdir expects 1 argument")
+        path = objects[args[1], "value"]
+        result = system("rm -rf " shell_escape(path))
+        return create_value(TYPE_INT, result)
+    }
+    else if (parts[2] == "rename") {
+        if (argc != 2) error("rename expects 2 arguments")
+        old = objects[args[1], "value"]
+        new = objects[args[2], "value"]
+        result = system("mv " shell_escape(old) " " shell_escape(new))
+        return create_value(TYPE_INT, result)
+    }
+    else if (parts[2] == "copy") {
+        if (argc != 2) error("copy expects 2 arguments")
+        src = objects[args[1], "value"]
+        dst = objects[args[2], "value"]
+        result = system("cp " shell_escape(src) " " shell_escape(dst))
+        return create_value(TYPE_INT, result)
+    }
+    else if (parts[2] == "list") {
+        if (argc != 1) error("list expects 1 argument")
+        path = objects[args[1], "value"]
+        cmd = "ls -1 " shell_escape(path)
+        arr_id = create_array()
+        idx = 0
+        while ((cmd | getline line) > 0) {
+            element_ids[idx] = create_value(TYPE_STRING, line)
+            idx += 1
+        }
+        close(cmd)
+        return create_array(element_ids, idx - 1)
+    }
+    else if (parts[2] == "size") {
+        if (argc != 1) error("size expects 1 argument")
+        path = objects[args[1], "value"]
+        cmd = "stat -f %z " shell_escape(path) " 2>/dev/null || stat -c %s " shell_escape(path)
+        print "CMD: " cmd
+        cmd | getline result
+        close(cmd)
+        return create_value(TYPE_INT, result)
+    }
+    
+    error("Unknown fs function: " func_name)
+}
+
+# @doc [http]
+# Built-in HTTP client (used curl)
+# Header keys on the response are lowercased.
+# examples:
+# import http;
+# let r = http.get("https://example.com");
+# print(r.status);
+# print(r.body);
+# http.post(url, body, {"Content-Type": "application/json"});
+function builtin_http(func_name, args, argc,   parts, method, url, body_id, headers_id, s) {
+    split(func_name, parts, ".")
+
+    if (parts[2] == "url_encode") {
+        if (argc != 1) error("url_encode expects 1 argument")
+        s = objects[args[1], "value"]
+        return create_value(TYPE_STRING, http_url_encode(s))
+    }
+
+    if (parts[2] == "json_parse") {
+        if (argc != 1) error("json_parse expects 1 argument")
+        s = objects[args[1], "value"]
+        return http_json_parse(s)
+    }
+
+    if (parts[2] == "json_stringify") {
+        if (argc != 1) error("json_stringify expects 1 argument")
+        return create_value(TYPE_STRING, http_json_stringify(args[1]))
+    }
+
+    if (parts[2] == "get")    method = "GET"
+    else if (parts[2] == "post")   method = "POST"
+    else if (parts[2] == "put")    method = "PUT"
+    else if (parts[2] == "delete") method = "DELETE"
+    else if (parts[2] == "patch")  method = "PATCH"
+    else if (parts[2] == "head")   method = "HEAD"
+    else error("Unknown http function: " func_name)
+
+    if (argc < 1) error(parts[2] " expects at least 1 argument (url)")
+    url = objects[args[1], "value"]
+
+    body_id = ""
+    headers_id = ""
+    if (method == "GET" || method == "DELETE" || method == "HEAD") {
+        if (argc >= 2) headers_id = args[2]
+    } else {
+        if (argc >= 2) body_id = args[2]
+        if (argc >= 3) headers_id = args[3]
+    }
+
+    return http_request(method, url, body_id, headers_id)
+}
+
+function http_request(method, url, body_id, headers_id,   counter, body_file, hdr_file, cmd, status, line, body, nlines, header_lines, i, last_status_idx, colon, hkey, hval, hcount, hk, hv, type_h, prop_count, key, val_id, val, btype, bval, response_keys, response_values, hdr_obj_id, body_val_id, status_val_id) {
+    counter = ++http_request_counter
+    body_file = "/tmp/awkward_http_body_" counter
+    hdr_file  = "/tmp/awkward_http_hdr_" counter
+
+    cmd = "curl -sS -L -X " shell_escape(method)
+    cmd = cmd " -D " shell_escape(hdr_file)
+    cmd = cmd " -o " shell_escape(body_file)
+    cmd = cmd " -w '%{http_code}'"
+
+    if (method == "HEAD") {
+        cmd = cmd " -I"
+    }
+
+    if (headers_id != "" && headers_id != 0) {
+        type_h = objects[headers_id, "type"]
+        if (type_h == TYPE_OBJECT || type_h == TYPE_STRUCT) {
+            prop_count = objects[headers_id, "properties_count"] + 0
+            for (i = 1; i <= prop_count; i++) {
+                key = objects[headers_id, "prop_key_" i]
+                val_id = objects[headers_id, "prop_value_" i]
+                val = objects[val_id, "value"]
+                cmd = cmd " -H " shell_escape(key ": " val)
+            }
+        }
+    }
+
+    if (body_id != "" && body_id != 0) {
+        btype = objects[body_id, "type"]
+        if (btype != TYPE_NULL) {
+            bval = objects[body_id, "value"]
+            cmd = cmd " --data-raw " shell_escape(bval)
+        }
+    }
+
+    cmd = cmd " " shell_escape(url)
+    cmd = cmd " 2>/dev/null"
+
+    debug_msg("HTTP " method " " url)
+
+    status = ""
+    cmd | getline status
+    close(cmd)
+
+    body = ""
+    if (method != "HEAD") {
+        nlines = 0
+        while ((getline line < body_file) > 0) {
+            if (nlines == 0) body = line
+            else body = body "\n" line
+            nlines++
+        }
+        close(body_file)
+    }
+    system("rm -f " shell_escape(body_file))
+
+    nlines = 0
+    delete header_lines
+    while ((getline line < hdr_file) > 0) {
+        sub(/\r$/, "", line)
+        nlines++
+        header_lines[nlines] = line
+    }
+    close(hdr_file)
+    system("rm -f " shell_escape(hdr_file))
+
+    last_status_idx = 0
+    for (i = 1; i <= nlines; i++) {
+        if (header_lines[i] ~ /^HTTP\//) last_status_idx = i
+    }
+
+    hcount = 0
+    for (i = last_status_idx + 1; i <= nlines; i++) {
+        if (header_lines[i] == "") break
+        colon = index(header_lines[i], ":")
+        if (colon > 0) {
+            hkey = substr(header_lines[i], 1, colon - 1)
+            hval = substr(header_lines[i], colon + 1)
+            sub(/^[ \t]+/, "", hval)
+            hkey = tolower(hkey)
+            hcount++
+            hk[hcount] = hkey
+            hv[hcount] = create_value(TYPE_STRING, hval)
+        }
+    }
+
+    hdr_obj_id = create_object(hk, hv, hcount)
+
+    body_val_id = create_value(TYPE_STRING, body)
+    status_val_id = create_value(TYPE_INT, status + 0)
+
+    response_keys[1] = "status"
+    response_keys[2] = "headers"
+    response_keys[3] = "body"
+    response_values[1] = status_val_id
+    response_values[2] = hdr_obj_id
+    response_values[3] = body_val_id
+
+    return create_object(response_keys, response_values, 3)
+}
+
+function http_url_encode(s,   cmd, line, hex_str, parts, n, i, byte_val, c, out) {
+    if (s == "") return ""
+
+    cmd = "printf %s " shell_escape(s) " | od -An -tx1 -v"
+    hex_str = ""
+    while ((cmd | getline line) > 0) {
+        gsub(/^[ \t]+|[ \t]+$/, "", line)
+        if (line == "") continue
+        hex_str = hex_str (hex_str == "" ? "" : " ") line
+    }
+    close(cmd)
+
+    n = split(hex_str, parts, " ")
+    out = ""
+    for (i = 1; i <= n; i++) {
+        if (parts[i] == "") continue
+        byte_val = strtonum("0x" parts[i])
+        c = sprintf("%c", byte_val)
+        if (byte_val < 128 && c ~ /[A-Za-z0-9._~-]/) {
+            out = out c
+        } else {
+            out = out "%" toupper(parts[i])
+        }
+    }
+    return out
+}
+
+function http_json_parse(s,   val_id) {
+    json_src = s
+    json_pos = 1
+    json_len = length(s)
+    json_skip_ws()
+    if (json_pos > json_len) error("json_parse: empty input")
+    val_id = json_parse_value()
+    json_skip_ws()
+    if (json_pos <= json_len) error("json_parse: trailing data at position " json_pos)
+    return val_id
+}
+
+function json_skip_ws(   c) {
+    while (json_pos <= json_len) {
+        c = substr(json_src, json_pos, 1)
+        if (c == " " || c == "\t" || c == "\n" || c == "\r") json_pos++
+        else break
+    }
+}
+
+function json_parse_value(   c) {
+    json_skip_ws()
+    if (json_pos > json_len) error("json_parse: unexpected end of input")
+    c = substr(json_src, json_pos, 1)
+    if (c == "{") return json_parse_object()
+    if (c == "[") return json_parse_array()
+    if (c == "\"") return json_parse_string()
+    if (c == "t" || c == "f") return json_parse_bool()
+    if (c == "n") return json_parse_null()
+    if (c == "-" || (c >= "0" && c <= "9")) return json_parse_number()
+    error("json_parse: unexpected character '" c "' at position " json_pos)
+}
+
+function json_parse_object(   keys, values, count, key_id, val_id, c) {
+    json_pos++
+    count = 0
+    json_skip_ws()
+    if (substr(json_src, json_pos, 1) == "}") {
+        json_pos++
+        return create_object(keys, values, 0)
+    }
+    while (1) {
+        json_skip_ws()
+        if (substr(json_src, json_pos, 1) != "\"") error("json_parse: expected string key at position " json_pos)
+        key_id = json_parse_string()
+        json_skip_ws()
+        if (substr(json_src, json_pos, 1) != ":") error("json_parse: expected ':' at position " json_pos)
+        json_pos++
+        val_id = json_parse_value()
+        count++
+        keys[count] = objects[key_id, "value"]
+        values[count] = val_id
+        json_skip_ws()
+        c = substr(json_src, json_pos, 1)
+        if (c == ",") { json_pos++; continue }
+        if (c == "}") { json_pos++; break }
+        error("json_parse: expected ',' or '}' at position " json_pos)
+    }
+    return create_object(keys, values, count)
+}
+
+function json_parse_array(   element_ids, count, c) {
+    json_pos++
+    count = 0
+    json_skip_ws()
+    if (substr(json_src, json_pos, 1) == "]") {
+        json_pos++
+        return create_array(element_ids, 0)
+    }
+    while (1) {
+        element_ids[++count] = json_parse_value()
+        json_skip_ws()
+        c = substr(json_src, json_pos, 1)
+        if (c == ",") { json_pos++; continue }
+        if (c == "]") { json_pos++; break }
+        error("json_parse: expected ',' or ']' at position " json_pos)
+    }
+    return create_array(element_ids, count)
+}
+
+function json_parse_string(   out, c, next_c, hex, hex2, code, low) {
+    json_pos++
+    out = ""
+    while (json_pos <= json_len) {
+        c = substr(json_src, json_pos, 1)
+        if (c == "\"") {
+            json_pos++
+            return create_value(TYPE_STRING, out)
+        }
+        if (c == "\\") {
+            json_pos++
+            if (json_pos > json_len) error("json_parse: dangling backslash")
+            next_c = substr(json_src, json_pos, 1)
+            if (next_c == "\"") out = out "\""
+            else if (next_c == "\\") out = out "\\"
+            else if (next_c == "/") out = out "/"
+            else if (next_c == "b") out = out sprintf("%c", 8)
+            else if (next_c == "f") out = out sprintf("%c", 12)
+            else if (next_c == "n") out = out "\n"
+            else if (next_c == "r") out = out "\r"
+            else if (next_c == "t") out = out "\t"
+            else if (next_c == "u") {
+                if (json_pos + 4 > json_len) error("json_parse: invalid \\u escape")
+                hex = substr(json_src, json_pos + 1, 4)
+                code = strtonum("0x" hex)
+                json_pos += 4
+                if (code >= 55296 && code <= 56319) {
+                    if (substr(json_src, json_pos + 1, 2) != "\\u") error("json_parse: expected low surrogate")
+                    json_pos += 2
+                    if (json_pos + 4 > json_len) error("json_parse: invalid low surrogate")
+                    hex2 = substr(json_src, json_pos + 1, 4)
+                    low = strtonum("0x" hex2)
+                    json_pos += 4
+                    code = 65536 + (code - 55296) * 1024 + (low - 56320)
+                }
+                out = out sprintf("%c", code)
+            }
+            else error("json_parse: invalid escape \\" next_c)
+            json_pos++
+        } else {
+            out = out c
+            json_pos++
+        }
+    }
+    error("json_parse: unterminated string")
+}
+
+function json_parse_number(   start, c, has_dot, has_e, num_str) {
+    start = json_pos
+    has_dot = 0
+    has_e = 0
+    if (substr(json_src, json_pos, 1) == "-") json_pos++
+    while (json_pos <= json_len) {
+        c = substr(json_src, json_pos, 1)
+        if (c >= "0" && c <= "9") {
+            json_pos++
+        } else if (c == "." && !has_dot && !has_e) {
+            has_dot = 1
+            json_pos++
+        } else if ((c == "e" || c == "E") && !has_e) {
+            has_e = 1
+            json_pos++
+            c = substr(json_src, json_pos, 1)
+            if (c == "+" || c == "-") json_pos++
+        } else {
+            break
+        }
+    }
+    num_str = substr(json_src, start, json_pos - start)
+    if (has_dot || has_e) return create_value(TYPE_FLOAT, num_str + 0)
+    return create_value(TYPE_INT, num_str + 0)
+}
+
+function json_parse_bool() {
+    if (substr(json_src, json_pos, 4) == "true") {
+        json_pos += 4
+        return create_value(TYPE_BOOL, 1)
+    }
+    if (substr(json_src, json_pos, 5) == "false") {
+        json_pos += 5
+        return create_value(TYPE_BOOL, 0)
+    }
+    error("json_parse: invalid literal at position " json_pos)
+}
+
+function json_parse_null() {
+    if (substr(json_src, json_pos, 4) == "null") {
+        json_pos += 4
+        return create_value(TYPE_NULL, "null")
+    }
+    error("json_parse: invalid literal at position " json_pos)
+}
+
+function http_json_stringify(val_id,   type, val, out, i, n, count, key, prop_val_id) {
+    type = objects[val_id, "type"]
+    if (type == TYPE_NULL)   return "null"
+    if (type == TYPE_BOOL)   return (objects[val_id, "value"] + 0) ? "true" : "false"
+    if (type == TYPE_INT)    return objects[val_id, "value"] ""
+    if (type == TYPE_FLOAT)  return objects[val_id, "value"] ""
+    if (type == TYPE_STRING) return json_escape_string(objects[val_id, "value"])
+    if (type == TYPE_ARRAY) {
+        n = objects[val_id, "length"]
+        out = "["
+        for (i = 0; i < n; i++) {
+            if (i > 0) out = out ","
+            out = out http_json_stringify(objects[val_id, "element_" i])
+        }
+        return out "]"
+    }
+    if (type == TYPE_OBJECT || type == TYPE_STRUCT) {
+        count = objects[val_id, "properties_count"] + 0
+        out = "{"
+        for (i = 1; i <= count; i++) {
+            if (i > 1) out = out ","
+            key = objects[val_id, "prop_key_" i]
+            prop_val_id = objects[val_id, "prop_value_" i]
+            out = out json_escape_string(key) ":" http_json_stringify(prop_val_id)
+        }
+        return out "}"
+    }
+    error("json_stringify: cannot stringify type " type)
+}
+
+function json_escape_string(s,   out, i, n, c, code) {
+    out = "\""
+    n = length(s)
+    for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "\"")      out = out "\\\""
+        else if (c == "\\") out = out "\\\\"
+        else if (c == "\n") out = out "\\n"
+        else if (c == "\r") out = out "\\r"
+        else if (c == "\t") out = out "\\t"
+        else if (c == "\b") out = out "\\b"
+        else if (c == "\f") out = out "\\f"
+        else                out = out c
+    }
+    return out "\""
 }
 
 # @doc [builtins]
@@ -2286,7 +3024,6 @@ function create_array(element_ids, count,   array_id, i) {
     debug_msg("Creating array with " count " elements")
     array_id = ++object_counter
     objects[array_id, "type"] = TYPE_ARRAY
-    objects[array_id, "object_type"] = create_object_type(TYPE_ARRAY)
     objects[array_id, "length"] = count
 
     for (i = 1; i <= count; i++) {
@@ -2307,6 +3044,9 @@ function parse_object_literal(   obj_node, key, value_node, prop_node) {
     while (get_token_value() != "}") {
         if (get_token_type() == "IDENTIFIER" || get_token_type() == "STRING") {
             key = get_token_value()
+            if (get_token_type() == "STRING") {
+                key = unescape_string(substr(key, 2, length(key) - 2))
+            }
             advance_token()
             expect_token("OPERATOR", "=")
             value_node = parse_expression()
@@ -2631,20 +3371,18 @@ function parse_block_statement(   block_node, stmt_node) {
     return block_node
 }
 
-function execute_block_statement(block_node,   old_scope_id, result_id, i, stmt_node) {
+function execute_block_statement(block_node,   old_scope_id, result_id, i, n) {
     debug_msg("Executing block statement")
     old_scope_id = current_scope_id
     current_scope_id = new_scope(current_scope_id)
 
     result_id = create_value(TYPE_NULL, "null")
+    n = ast_nodes[block_node, "body_count"]
 
-    for (i = 1; i <= ast_nodes[block_node, "body_count"]; i++) {
-        stmt_node = ast_nodes[block_node, "body_" i]
-        result_id = execute(stmt_node)
-
-        if (control_flow_active()) {
+    for (i = 1; i <= n; i++) {
+        result_id = execute(ast_nodes[block_node, "body_" i])
+        if (return_value_set || break_flag || continue_flag || error_occurred)
             break
-        }
     }
 
     current_scope_id = old_scope_id
@@ -2946,7 +3684,7 @@ function execute_function_declaration(func_node,   func_name, func_id) {
     return create_value(TYPE_NULL, "null")
 }
 
-function call_function(func_id, args, argc,   func_def, closure_scope, old_scope_id, i, param_name, arg_val, body_id, result_id, old_return_value_set, old_return_value) {
+function call_function(func_id, args, argc,   func_def, closure_scope, old_scope_id, i, param_name, arg_val, body_id, result_id, old_return_value_set, old_return_value, body_count, bi) {
     debug_msg("Calling function with id " func_id)
     func_def = objects[func_id, "definition"]
     closure_scope = objects[func_id, "closure_scope"]
@@ -2966,7 +3704,16 @@ function call_function(func_id, args, argc,   func_def, closure_scope, old_scope
     old_return_value = return_value
     return_value_set = 0
     body_id = ast_nodes[func_def, "body"]
-    result_id = execute(body_id)
+    if (ast_nodes[body_id, "type"] == "BlockStatement") {
+        body_count = ast_nodes[body_id, "body_count"]
+        for (bi = 1; bi <= body_count; bi++) {
+            result_id = execute(ast_nodes[body_id, "body_" bi])
+            if (return_value_set || break_flag || continue_flag || error_occurred)
+                break
+        }
+    } else {
+        result_id = execute(body_id)
+    }
     if (return_value_set) {
         result_id = return_value
     }
@@ -3233,7 +3980,7 @@ function parse_primary(   prim_type, prim_value, prim_node, left, name, expr, op
         prim_node = ++ast_node_counter
         ast_nodes[prim_node, "type"] = "Literal"
         ast_nodes[prim_node, "value_type"] = TYPE_STRING
-        ast_nodes[prim_node, "value"] = substr(prim_value, 2, length(prim_value) - 2)
+        ast_nodes[prim_node, "value"] = unescape_string(substr(prim_value, 2, length(prim_value) - 2))
         left = prim_node
     } else if (prim_type == "IDENTIFIER") {
         name = prim_value
@@ -3535,6 +4282,15 @@ function system_cwd(cmd, cwd) {
     }
     close(cmd)
     return cwd
+}
+
+# HTTP HELPERS
+
+# FS HELPERS
+
+function shell_escape(str) {
+    gsub(/'/, "'\\''", str)
+    return "'" str "'"
 }
 
 # AWKWARD HELPERS

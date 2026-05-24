@@ -1,0 +1,24 @@
+import io
+import fs
+
+let path = "/tmp/awkward_test_io.txt";
+fs.remove(path);
+fs.copy("/dev/null", path);
+
+let w = io.open(path, "w");
+print(io.write(w, "lol kek cheburek"));
+io.close(w);
+
+let r = io.open(path, "r");
+print(io.read(r, 0));
+io.close(r);
+
+let a = io.open(path, "a");
+print(io.write(a, "appended kek"));
+io.close(a);
+
+let r2 = io.open(path, "r");
+print(io.read(r2, 0));
+io.close(r2);
+
+fs.remove(path);

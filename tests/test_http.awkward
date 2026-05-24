@@ -1,0 +1,52 @@
+import http;
+
+print(type(http));
+print(type(http.get));
+print(type(http.post));
+print(type(http.put));
+print(type(http.delete));
+print(type(http.patch));
+print(type(http.head));
+print(type(http.url_encode));
+print(type(http.json_parse));
+print(type(http.json_stringify));
+
+print(http.url_encode(""));
+print(http.url_encode("lol"));
+print(http.url_encode("lol kek"));
+print(http.url_encode("a b&c=d?e/f"));
+print(http.url_encode("safe-._~chars"));
+
+print(http.json_parse("42"));
+print(http.json_parse("-3.14"));
+print(http.json_parse("\"hi\""));
+print(http.json_parse("true"));
+print(http.json_parse("false"));
+print(http.json_parse("null"));
+
+let xs = http.json_parse("[10, 20, 30]");
+print(type(xs), len(xs));
+for (let i in xs) {
+    print(i, xs[i]);
+}
+
+let o = http.json_parse("{\"name\": \"Spiderman\", \"age\": 36, \"admin\": true}");
+print(o.name);
+print(o.age);
+print(o.admin);
+
+let beers = http.json_parse("[{\"name\":\"Pale Ale\",\"price\":\"$5\"},{\"name\":\"IPA\",\"price\":\"$6\"}]");
+print(len(beers));
+for (let i in beers) {
+    let beer = beers[i];
+    print(beer.name, beer.price);
+}
+
+let payload = {"user" = "Spiderman", "tags" = [1, 2, 3], "active" = true};
+let s = http.json_stringify(payload);
+print(s);
+let back = http.json_parse(s);
+print(back.user, back.active, len(back.tags));
+
+let esc = http.json_parse("\"a\\nb\\tc\\\"d\\\\e\\u041f\"");
+print(esc);
